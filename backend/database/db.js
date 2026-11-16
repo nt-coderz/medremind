@@ -26,6 +26,7 @@ if (!AUTH_SECRET) {
     try { fs.writeFileSync(SECRET_FILE, AUTH_SECRET, { mode: 0o600 }); } catch (e) {}
   }
 }
+try { if (fs.existsSync(SECRET_FILE)) fs.chmodSync(SECRET_FILE, 0o600); } catch {}
 
 // Password hashing utilities using crypto PBKDF2
 export function hashPassword(plainTextPassword) {
