@@ -58,11 +58,11 @@ export async function initNotificationChannels() {
 
   if (Capacitor.isNativePlatform()) {
     try {
-      // Create high-importance channel with alarm_chime.wav
+      // Create a private high-importance channel using the system default sound.
       await LocalNotifications.createChannel({
         id: 'medremind_alarms_private',
         name: 'Medication Reminders & Alarms',
-        description: 'Critical reminders for prescribed medication timings with alarm sound and vibration',
+        description: 'Medication dose reminders with system sound and vibration',
         importance: 5, // IMPORTANCE_HIGH (Heads-up alert, bypasses basic silence)
         vibration: true,
         visibility: 0, // VISIBILITY_PRIVATE (hide medication details on the lock screen)
