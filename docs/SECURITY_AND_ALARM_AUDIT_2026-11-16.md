@@ -185,3 +185,6 @@ The following changes have since been committed to `security/medremind-audit-202
 
 
 - The notification channel ID was versioned to `medremind_alarms_private` so existing Android installations receive a new private-visibility channel; Android notification channel settings cannot reliably be retroactively changed by updating the old channel configuration.
+
+
+- Removed the reference to a missing `alarm_chime.wav` asset. The private notification channel now uses Android's system default notification sound instead of risking silent notifications from a nonexistent custom sound file.
