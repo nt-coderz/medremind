@@ -182,3 +182,6 @@ The following changes have since been committed to `security/medremind-audit-202
 
 
 - Frontend API URL overrides now reject non-HTTPS remote origins. Plain HTTP is allowed only for localhost during non-production development, preventing the app from attaching bearer tokens to an insecure remote API URL.
+
+
+- The notification channel ID was versioned to `medremind_alarms_private` so existing Android installations receive a new private-visibility channel; Android notification channel settings cannot reliably be retroactively changed by updating the old channel configuration.
