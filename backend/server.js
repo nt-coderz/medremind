@@ -229,7 +229,17 @@ const storage = multer.diskStorage({
     cb(null, `rx-${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
   }
 });
-const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = multer({
+  storage,
+  limits: { fileSize: 15 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    if (!allowedTypes.has(file.mimetype)) {
+      return cb(new Error('Unsupported upload type. Please use a JPG, PNG, or WEBP image.'));
+    }
+    cb(null, true);
+  }
+});
 
 // JSON Store Helpers
 function getStore(filename, defaultVal = []) {
