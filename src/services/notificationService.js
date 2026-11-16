@@ -235,7 +235,7 @@ export async function scheduleMedicationDoseNotification(medicine, timeStr, sche
  * Snooze a reminder by 5, 10, or 15 minutes
  * Cancels existing snooze duplicate before rescheduling
  */
-export async function snoozeNotification(medicine, timeSlot, minutes = 10) {
+export async function snoozeNotification(medicine, timeSlot, minutes = 10, occurrenceDate = null) {
   if (!medicine || medicine.status === 'Inactive') {
     return;
   }
@@ -266,7 +266,8 @@ export async function snoozeNotification(medicine, timeSlot, minutes = 10) {
               medicineId: medicine.id,
               medicine,
               timeSlot,
-              isSnooze: true
+              isSnooze: true,
+              occurrenceDate: occurrenceDate || [snoozeDate.getFullYear(), String(snoozeDate.getMonth() + 1).padStart(2, '0'), String(snoozeDate.getDate()).padStart(2, '0')].join('-')
             }
           }
         ]
