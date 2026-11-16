@@ -799,6 +799,7 @@ app.post('/api/auth/schedule-deletion', async (req, res) => {
     }
     const reason = req.body.reason || 'User initiated account deletion';
     const updatedUser = await db.scheduleUserDeletion(req.user.id, req.user.id, reason);
+    if (!updatedUser) return res.status(404).json({ success: false, error: 'User account not found.' });
 
     // Record system notification for user
     const notifMsg = `Your MedRemind account has been scheduled for permanent deletion in 24 hours. You can cancel this request at any time before the period expires.`;
@@ -829,6 +830,7 @@ app.post('/api/auth/cancel-deletion', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Authentication required' });
     }
     const updatedUser = await db.cancelUserDeletion(req.user.id, req.user.id);
+    if (!updatedUser) return res.status(404).json({ success: false, error: 'User account not found.' });
 
     await db.saveNotification({
       recipientId: req.user.id,
@@ -871,6 +873,7 @@ app.post('/api/admin/users/:userId/schedule-deletion', requireAdmin, async (req,
 
     const reason = req.body.reason || 'Administrator scheduled account deletion';
     const updatedUser = await db.scheduleUserDeletion(targetUserId, adminId, reason);
+    if (!updatedUser) return res.status(404).json({ success: false, error: 'Target user not found.' });
 
     await db.saveNotification({
       recipientId: targetUserId,
@@ -904,6 +907,7 @@ app.post('/api/admin/users/:userId/cancel-deletion', requireAdmin, async (req, r
     }
 
     const updatedUser = await db.cancelUserDeletion(targetUserId, adminId);
+    if (!updatedUser) return res.status(404).json({ success: false, error: 'Target user not found.' });
 
     await db.saveNotification({
       recipientId: targetUserId,
