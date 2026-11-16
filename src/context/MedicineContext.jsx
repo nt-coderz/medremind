@@ -3,8 +3,9 @@ import { App } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { format } from 'date-fns';
 import { 
-  scheduleMedicationDoseNotification, 
-  cancelMedicationNotifications, 
+  scheduleMedicationDoseNotification,
+  cancelMedicationNotifications,
+  cancelAllMedicationNotifications, 
   snoozeNotification, 
   parseArbitraryTime,
   setNotificationActionHandler
@@ -366,6 +367,10 @@ export function MedicineProvider({ children }) {
 
   // Notification actions update the same local dose ledger used by the Schedule screen.
   useEffect(() => {
+    if (!storageScope || loadedStorageScope !== storageScope) {
+      setNotificationActionHandler(null);
+      return () => setNotificationActionHandler(null);
+    }
     setNotificationActionHandler(async (action) => {
       const extra = action.notification?.extra || {};
       const med = medicines.find(item => item.id === extra.medicineId);
@@ -415,9 +420,14 @@ export function MedicineProvider({ children }) {
     let appStateListener = null;
 
     const refreshAlarmQueue = async () => {
-      if (disposed || refreshing || !Capacitor.isNativePlatform() || !storageScope || loadedStorageScope !== storageScope) return;
+      if (disposed || refreshing || !Capacitor.isNativePlatform()) return;
       refreshing = true;
       try {
+        if (!storageScope) {
+          await cancelAllMedicationNotifications();
+          return;
+        }
+        if (loadedStorageScope !== storageScope) return;
         for (const med of medicines) {
           await cancelMedicationNotifications(med.id, { includeSnoozes: false });
         }
