@@ -2113,7 +2113,7 @@ app.post('/api/approve-prescription', requirePatientAccess, async (req, res) => 
 
     const newMed = {
       id: medId,
-      patientId: patientId || 'USR-e87f3b14-9a2c-4d5e-88f1-209471ab5e82',
+      patientId,
       prescriptionId,
       name: brandName,
       brandName: brandName,
