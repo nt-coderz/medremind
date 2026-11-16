@@ -423,6 +423,10 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Email address is required.' });
     }
     const cleanEmail = email.trim().toLowerCase();
+    const configuredAdminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    if (configuredAdminEmail && cleanEmail === configuredAdminEmail) {
+      return res.status(403).json({ success: false, error: 'This email address is reserved for the administrator account.' });
+    }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(cleanEmail)) {
       return res.status(400).json({ success: false, error: 'Please enter a valid email address.' });
