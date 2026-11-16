@@ -243,3 +243,12 @@ test('PostgreSQL user lookups do not fall back to stale local account records', 
     db.memory.users = db.memory.users.filter(user => user.id !== staleUser.id);
   }
 });
+
+
+test('account deletion endpoints reject unauthenticated requests', async () => {
+  const schedule = await fetch(`${baseUrl}/api/auth/schedule-deletion`, { method: 'POST' });
+  assert.equal(schedule.status, 401);
+
+  const cancel = await fetch(`${baseUrl}/api/auth/cancel-deletion`, { method: 'POST' });
+  assert.equal(cancel.status, 401);
+});
