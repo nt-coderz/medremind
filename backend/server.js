@@ -231,20 +231,8 @@ function logAudit(action, actorId, details, entityName = null, entityId = null) 
 
 // Lookup verified registered user
 async function getRegisteredUser(patientId) {
-  let user = (await db.findUserById(patientId)) || (await db.findUserByEmailOrId(patientId));
-  if (!user && (patientId === 'patient-alex' || patientId === 'patient-default')) {
-    user = await db.findUserById('USR-e87f3b14-9a2c-4d5e-88f1-209471ab5e82');
-  }
-  if (!user) {
-    const allUsers = await db.listUsers();
-    if (allUsers.length > 0) user = allUsers[0];
-  }
-  return user || {
-    id: patientId || 'USR-patient',
-    name: 'Patient',
-    email: 'patient@medremind.app',
-    role: 'patient'
-  };
+  if (!patientId) return null;
+  return (await db.findUserById(patientId)) || (await db.findUserByEmailOrId(patientId)) || null;
 }
 
 // Health check with database, environment, and uptime reporting
@@ -1136,7 +1124,9 @@ app.get('/api/users/:patientId', requireAuth, async (req, res) => {
     return res.status(403).json({ success: false, error: 'Access denied' });
   }
   const user = await getRegisteredUser(req.params.patientId);
-  res.json({ success: true, user });
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+  const { passwordHash, ...safeUser } = user;
+  res.json({ success: true, user: safeUser });
 });
 
 // Strip OCR parsing fallback
@@ -1425,6 +1415,7 @@ app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
 
     // 1. Retrieve registered patient identity from authenticated database
     const registeredUser = await getRegisteredUser(patientId);
+    if (!registeredUser) return res.status(404).json({ success: false, error: 'Patient account not found' });
     const registeredPatientName = registeredUser.name;
     const batchId = `batch-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
@@ -1852,6 +1843,7 @@ app.post('/api/approve-prescriptions', requirePatientAccess, async (req, res) =>
   }
 
   const registeredUser = await getRegisteredUser(patientId);
+  if (!registeredUser) return res.status(404).json({ success: false, error: 'Patient account not found' });
   const medications = getStore('medications.json', []);
   const schedules = getStore('schedules.json', []);
   const createdMedications = [];
@@ -1998,13 +1990,15 @@ app.post('/api/approve-prescriptions', requirePatientAccess, async (req, res) =>
 /**
  * Backward compatibility: POST /api/scan-medicine
  */
-app.post('/api/scan-medicine', requireAuth, upload.single('prescriptionImage'), async (req, res) => {
+app.post('/api/scan-medicine', requirePatientAccess, upload.single('prescriptionImage'), async (req, res) => {
   try {
     let filePath = null;
     let fileBuffer = null;
-    const patientId = req.body.patientId || 'patient-default';
+    const patientId = req.user.role === 'admin' ? req.body.patientId : req.user.id;
+    if (!patientId) return res.status(400).json({ success: false, error: 'Patient ID is required for administrator scans' });
     const mode = req.body.mode || 'online';
     const registeredUser = await getRegisteredUser(patientId);
+    if (!registeredUser) return res.status(404).json({ success: false, error: 'Patient account not found' });
 
     if (req.file) {
       filePath = req.file.path;
