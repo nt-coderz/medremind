@@ -52,9 +52,14 @@ test('admin user directory rejects unauthenticated and patient requests', async 
   assert.equal(admin.status, 200);
 });
 
-test('patient medication endpoints require authentication', async () => {
-  const response = await fetch(`${baseUrl}/api/medications`);
-  assert.equal(response.status, 401);
+test('patient medication endpoints require authentication and reject another patient ID', async () => {
+  const anonymous = await fetch(`${baseUrl}/api/medications`);
+  assert.equal(anonymous.status, 401);
+
+  const crossPatient = await fetch(`${baseUrl}/api/medications?patientId=some-other-patient`, {
+    headers: { Authorization: `Bearer ${patientToken}` }
+  });
+  assert.equal(crossPatient.status, 403);
 });
 
 test('scheduler tick rejects requests without its shared secret', async () => {
