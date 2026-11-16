@@ -952,7 +952,7 @@ app.delete('/api/food-logs/:id', requirePatientAccess, async (req, res) => {
     if (!success) {
       return res.status(404).json({ success: false, error: 'Food log not found' });
     }
-    await db.logAudit('FOOD_LOG_DELETED', patientId, { logId: req.params.id });
+    await db.logAudit('FOOD_LOG_DELETED', req.user.id, { patientId, logId: req.params.id });
     res.json({ success: true, deleted: true });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1003,7 +1003,7 @@ app.get('/api/food-lookup', async (req, res) => {
  */
 app.get('/api/nutrition-targets', requirePatientAccess, async (req, res) => {
   try {
-    const patientId = req.query.patientId || req.user?.id || 'USR-patient';
+    const patientId = req.user.role === 'admin' ? (req.query.patientId || req.user.id) : req.user.id;
     const targets = await db.getNutritionTargets(patientId);
     res.json({ success: true, targets });
   } catch (err) {
