@@ -62,9 +62,8 @@ export default function AdminUsersPage() {
     setIsProcessingDeletion(true);
     try {
       if (!isOnline()) throw new Error('An internet connection is required for administrator account changes.');
-      {
-        const token = localStorage.getItem('medremind_auth_token');
-        const res = await apiFetch(`/admin/users/${user.id}/schedule-deletion`, {
+      const token = localStorage.getItem('medremind_auth_token');
+      const res = await apiFetch(`/admin/users/${user.id}/schedule-deletion`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -72,10 +71,9 @@ export default function AdminUsersPage() {
           },
           body: JSON.stringify({ reason: deletionReason || 'Admin scheduled account closure' })
         });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || 'Failed to schedule deletion on server');
-        }
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to schedule deletion on server');
       }
       await refreshUsers();
       toast.warning(`Account for ${user.name} scheduled for deletion in 24 hours.`);
@@ -92,19 +90,18 @@ export default function AdminUsersPage() {
   const handleCancelUserDeletion = async (user) => {
     setIsProcessingDeletion(true);
     try {
-      if (isOnline()) {
-        const token = localStorage.getItem('medremind_auth_token');
-        const res = await apiFetch(`/admin/users/${user.id}/cancel-deletion`, {
+      if (!isOnline()) throw new Error('An internet connection is required for administrator account changes.');
+      const token = localStorage.getItem('medremind_auth_token');
+      const res = await apiFetch(`/admin/users/${user.id}/cancel-deletion`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             ...(token ? { 'Authorization': `Bearer ${token}` } : {})
           }
         });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || 'Failed to cancel deletion on server');
-        }
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to cancel deletion on server');
       }
       await refreshUsers();
       toast.success(`Scheduled deletion cancelled for ${user.name}. Account is Active.`);
