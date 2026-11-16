@@ -1278,7 +1278,7 @@ app.post('/api/scan-strip', requireAuth, upload.single('stripImage'), async (req
       const b64 = matches && matches.length === 3 ? matches[2] : rawB64;
       fileBuffer = Buffer.from(b64, 'base64');
       const filename = `strip-${Date.now()}-${Math.round(Math.random() * 1e9)}.jpg`;
-      filePath = path.join(uploadsDir, filename);
+      filePath = path.join(getPatientUploadDir(req.user.id), filename);
       fs.writeFileSync(filePath, fileBuffer);
     } else {
       return res.status(400).json({ error: 'No medicine strip image provided' });
@@ -1526,7 +1526,8 @@ app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
 
       const docId = `doc-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 6)}`;
       const savedFileName = `${docId}.${fileExt}`;
-      const savedFilePath = path.join(uploadsDir, savedFileName);
+      const patientUploadDir = getPatientUploadDir(patientId);
+      const savedFilePath = path.join(patientUploadDir, savedFileName);
       fs.writeFileSync(savedFilePath, fileBuffer);
 
       let docResult = null;
@@ -1535,7 +1536,8 @@ app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
         // --- PDF Multi-Page Pipeline ---
         console.log(`[Batch Scan] Processing PDF document: ${fileName}...`);
         const pageCount = getPdfPageCount(savedFilePath);
-        const extractedPages = extractPdfPagesToImages(savedFilePath, uploadsDir, `pdf-${docId}`);
+        const extractedPages = extractPdfPagesToImages(savedFilePath, patientUploadDir, `pdf-${docId}`);
+        extractedPages.forEach(page => { page.imageUrl = createPrivateMediaUrl(patientId, page.imagePath); });
         const digitalText = extractPdfDigitalText(savedFilePath);
 
         let pdfGeminiSuccess = false;
@@ -2064,7 +2066,7 @@ app.post('/api/scan-medicine', requirePatientAccess, upload.single('prescription
       const b64 = matches && matches.length === 3 ? matches[2] : req.body.imageBase64;
       fileBuffer = Buffer.from(b64, 'base64');
       const filename = `rx-${Date.now()}-${Math.round(Math.random() * 1e9)}.jpg`;
-      filePath = path.join(uploadsDir, filename);
+      filePath = path.join(getPatientUploadDir(req.user.id), filename);
       fs.writeFileSync(filePath, fileBuffer);
     } else {
       return res.status(400).json({ error: 'No prescription image provided' });
