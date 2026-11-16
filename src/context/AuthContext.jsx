@@ -12,16 +12,12 @@ export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
 
   // Registered users database for Admin management (initializes with demo patient if empty)
-  const [registeredUsers, setRegisteredUsers] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('medremind_registered_users') || '[]');
-      return Array.isArray(saved)
-        ? saved.map(({ password, passwordHash, ...safeUser }) => safeUser)
-        : [];
-    } catch {
-      return [];
-    }
-  });
+  const [registeredUsers, setRegisteredUsers] = useState([]);
+
+  useEffect(() => {
+    // Remove the legacy global admin cache; admin user data is fetched only into memory.
+    localStorage.removeItem('medremind_registered_users');
+  }, []);
 
   // System audit log for Admin overview (initializes empty)
   const [systemActivity, setSystemActivity] = useState(() => {
@@ -94,11 +90,6 @@ export function AuthProvider({ children }) {
       localStorage.setItem('medremind_auth_token', data.token);
       localStorage.setItem('medremind_auth_user', JSON.stringify(safeUser));
       setCurrentUser(safeUser);
-      setRegisteredUsers(prev => {
-        const next = [safeUser, ...prev.filter(user => user.id !== safeUser.id)];
-        localStorage.setItem('medremind_registered_users', JSON.stringify(next));
-        return next;
-      });
       logActivity('LOGIN', `${safeUser.name} (${safeUser.role})`, 'User authenticated by MedRemind API', safeUser.id);
       return { success: true, user: safeUser, token: data.token };
     } catch (error) {
@@ -154,11 +145,6 @@ export function AuthProvider({ children }) {
       localStorage.setItem('medremind_auth_token', data.token);
       localStorage.setItem('medremind_auth_user', JSON.stringify(safeUser));
       setCurrentUser(safeUser);
-      setRegisteredUsers(prev => {
-        const next = [safeUser, ...prev.filter(user => user.id !== safeUser.id)];
-        localStorage.setItem('medremind_registered_users', JSON.stringify(next));
-        return next;
-      });
       logActivity('REGISTRATION', `${safeUser.name} (${safeUser.role})`, `Account created with ID ${safeUser.id}`, safeUser.id);
       return { success: true, user: safeUser, token: data.token };
     } catch {
@@ -184,6 +170,7 @@ export function AuthProvider({ children }) {
       logActivity('LOGOUT', `${currentUser.name} (${currentUser.role})`, 'User logged out', currentUser.id);
     }
     setCurrentUser(null);
+    setRegisteredUsers([]);
     localStorage.removeItem('medremind_auth_user');
     localStorage.removeItem('medremind_auth_token');
     window.dispatchEvent(new Event('medremind:session-invalidated'));
@@ -329,7 +316,6 @@ export function AuthProvider({ children }) {
       if (!response.ok || !data.success || !Array.isArray(data.users)) return;
       const safeUsers = data.users.map(({ password, passwordHash, ...user }) => user);
       setRegisteredUsers(safeUsers);
-      localStorage.setItem('medremind_registered_users', JSON.stringify(safeUsers));
     } catch (error) {
       console.warn('[AuthContext] Could not refresh administrator user list:', error);
     }
