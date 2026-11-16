@@ -187,3 +187,23 @@ test('scan endpoints reject spoofed image MIME types based on actual file signat
   });
   assert.equal(response.status, 415);
 });
+
+
+test('prescription batch endpoint caps the number of uploaded documents', async () => {
+  const response = await fetch(`${baseUrl}/api/scan-prescriptions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${patientToken}`
+    },
+    body: JSON.stringify({
+      files: Array.from({ length: 6 }, (_, index) => ({
+        name: `document-${index + 1}.jpg`,
+        dataBase64: 'AAAA'
+      }))
+    })
+  });
+  assert.equal(response.status, 413);
+  const payload = await response.json();
+  assert.match(payload.error, /at most 5/);
+});
