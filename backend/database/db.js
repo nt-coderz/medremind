@@ -1214,7 +1214,8 @@ class DatabaseManager {
 
   async saveFoodLog(logData) {
     const id = logData.id || `food-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-    const patientId = logData.patient_id || logData.patientId || 'USR-patient';
+    const patientId = logData.patient_id || logData.patientId;
+    if (!patientId) throw new Error('Patient ID is required to save a food log.');
     const foodName = logData.food_name || logData.name || 'Food Item';
     const quantity = Number(logData.quantity) || 1;
     const unit = logData.unit || 'serving';
@@ -1258,6 +1259,7 @@ class DatabaseManager {
           fibreG, isEstimated, source, notes
         ]);
         const r = res.rows[0];
+        if (!r) throw new Error('Food log ID already belongs to another patient.');
         return {
           id: r.id,
           patient_id: r.patient_id,
@@ -1305,6 +1307,9 @@ class DatabaseManager {
     };
     const existingIndex = this.memory.foodLogs.findIndex(l => l.id === id);
     if (existingIndex >= 0) {
+      if (String(this.memory.foodLogs[existingIndex].patient_id || this.memory.foodLogs[existingIndex].patientId) !== String(patientId)) {
+        throw new Error('Food log ID already belongs to another patient.');
+      }
       this.memory.foodLogs[existingIndex] = record;
     } else {
       this.memory.foodLogs.unshift(record);
@@ -1314,12 +1319,11 @@ class DatabaseManager {
   }
 
   async deleteFoodLog(id, patientId) {
+    if (!patientId) throw new Error('Patient ID is required to delete a food log.');
     if (this.isPostgres && this.pool) {
       try {
-        const query = patientId 
-          ? `DELETE FROM public.food_logs WHERE id = $1 AND patient_id = $2`
-          : `DELETE FROM public.food_logs WHERE id = $1`;
-        const res = await this.pool.query(query, patientId ? [id, patientId] : [id]);
+        const query = `DELETE FROM public.food_logs WHERE id = $1 AND patient_id::text = $2`;
+        const res = await this.pool.query(query, [id, String(patientId)]);
         return res.rowCount > 0;
       } catch (err) {
         console.error('[Database] PostgreSQL deleteFoodLog error:', err.message);
