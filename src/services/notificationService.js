@@ -219,6 +219,7 @@ export async function scheduleMedicationDoseNotification(medicine, timeStr, sche
       actionTypeId: 'MED_REMINDER_ACTIONS',
       extra: {
         medicineId: medicine.id,
+        patientId: medicine.patientId || medicine.userId || null,
         medicineName: medicine.name,
         medicine,
         timeSlot: matchingSlot,
@@ -280,6 +281,7 @@ export async function snoozeNotification(medicine, timeSlot, minutes = 10, occur
             actionTypeId: 'MED_REMINDER_ACTIONS',
             extra: {
               medicineId: medicine.id,
+              patientId: medicine.patientId || medicine.userId || null,
               medicine,
               timeSlot,
               isSnooze: true,
