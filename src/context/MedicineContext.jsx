@@ -96,6 +96,29 @@ export function MedicineProvider({ children }) {
     setLoadedStorageScope(storageScope);
   }, [storageScope]);
 
+  // Clear in-memory health data and pending alarms on explicit sign-out or invalid session.
+  useEffect(() => {
+    const handleSessionInvalidated = () => {
+      setMedicines([]);
+      setDoseLogs({});
+      setPatientProfile({
+        bloodType: 'Not specified',
+        allergies: [],
+        emergencyContact: null,
+        settings: {
+          soundEnabled: true,
+          doseReminders: true,
+          quietHoursStart: '23:00',
+          quietHoursEnd: '07:00'
+        }
+      });
+      setNotifications([]);
+      cancelAllMedicationNotifications();
+    };
+    window.addEventListener('medremind:session-invalidated', handleSessionInvalidated);
+    return () => window.removeEventListener('medremind:session-invalidated', handleSessionInvalidated);
+  }, []);
+
   // Persist only after the current account's namespace has finished loading.
   useEffect(() => {
     if (!storageScope || loadedStorageScope !== storageScope) return;
@@ -423,10 +446,7 @@ export function MedicineProvider({ children }) {
       if (disposed || refreshing || !Capacitor.isNativePlatform()) return;
       refreshing = true;
       try {
-        if (!storageScope) {
-          await cancelAllMedicationNotifications();
-          return;
-        }
+        if (!storageScope) return;
         if (loadedStorageScope !== storageScope) return;
         for (const med of medicines) {
           await cancelMedicationNotifications(med.id, { includeSnoozes: false });
