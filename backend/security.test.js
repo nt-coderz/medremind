@@ -171,3 +171,19 @@ test('prescription approval cannot modify a medication belonging to another pati
   assert.equal(stillProtected.patientId, ownerId);
   assert.equal(stillProtected.instructions, 'Keep original instructions');
 });
+
+
+test('scan endpoints reject spoofed image MIME types based on actual file signatures', async () => {
+  const response = await fetch(`${baseUrl}/api/scan-strip`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${patientToken}`
+    },
+    body: JSON.stringify({
+      imageBase64: 'data:image/png;base64,QUFBQQ==',
+      mode: 'online'
+    })
+  });
+  assert.equal(response.status, 415);
+});
