@@ -186,6 +186,7 @@ export function AuthProvider({ children }) {
     setCurrentUser(null);
     localStorage.removeItem('medremind_auth_user');
     localStorage.removeItem('medremind_auth_token');
+    window.dispatchEvent(new Event('medremind:session-invalidated'));
   };
 
   // Schedule Account Deletion with 24-Hour Grace Period
@@ -304,6 +305,7 @@ export function AuthProvider({ children }) {
         setCurrentUser(null);
         localStorage.removeItem('medremind_auth_token');
         localStorage.removeItem('medremind_auth_user');
+        window.dispatchEvent(new Event('medremind:session-invalidated'));
       }
     } catch {
       // Keep the user signed out if the server cannot validate the session.
