@@ -63,7 +63,7 @@ export async function initNotificationChannels() {
         id: 'medremind_alarms_private',
         name: 'Medication Reminders & Alarms',
         description: 'Medication dose reminders with system sound and vibration',
-        importance: 5, // IMPORTANCE_HIGH (Heads-up alert, bypasses basic silence)
+        importance: 5, // IMPORTANCE_HIGH (heads-up priority; system Do Not Disturb still applies)
         vibration: true,
         visibility: 0, // VISIBILITY_PRIVATE (hide medication details on the lock screen)
         lights: true,
