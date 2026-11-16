@@ -264,6 +264,8 @@ export async function snoozeNotification(medicine, timeSlot, minutes = 10, occur
 
   if (Capacitor.isNativePlatform()) {
     try {
+      const permissionStatus = await getAlarmPermissionStatus();
+      const useExactAlarm = Capacitor.getPlatform() !== 'android' || permissionStatus.exactAlarm === 'granted';
       // Cancel previous snooze for this medicine/slot to prevent duplicates
       await LocalNotifications.cancel({ notifications: [{ id: snoozeId }] }).catch(() => {});
 
@@ -279,6 +281,7 @@ export async function snoozeNotification(medicine, timeSlot, minutes = 10, occur
             },
             channelId: 'medremind_alarms_private',
             actionTypeId: 'MED_REMINDER_ACTIONS',
+            isExactNotification: useExactAlarm,
             extra: {
               medicineId: medicine.id,
               patientId: medicine.patientId || medicine.userId || null,
