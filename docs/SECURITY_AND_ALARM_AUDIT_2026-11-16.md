@@ -230,3 +230,17 @@ The following changes have since been committed to `security/medremind-audit-202
 - Backend data and backup directories are created/restricted to owner-only access (`0700`).
 - Local fallback auth-secret files, durable-store snapshots and backup JSON files are created with owner-only file permissions (`0600`).
 - The uploads root and patient-specific upload directories are restricted to owner-only directory permissions (`0700`).
+
+
+### Additional hardening completed in this branch
+
+- Prescription batch processing now accepts at most five documents, validates base64 encoding before decoding, limits each decoded document to 7 MB, checks file signatures against the declared extension, and rejects PDFs outside the 1–20 page range before OCR page processing.
+- PostgreSQL user lookups now return a real database miss instead of falling through to stale local JSON/durable-store accounts. Medical-profile updates also no longer write to the local fallback when PostgreSQL confirms that the profile does not exist.
+- The account-deletion background interval is unreferenced so importing the server in automated tests does not keep the Node process alive.
+- GitHub Actions now cancels superseded validation runs for the same pull request so the latest revision is the one that should complete.
+- Notification Take/Skip actions now record against the notification's original local occurrence date, including actions tapped after midnight. Snoozed reminders preserve that occurrence date.
+
+### Verification caveat
+
+- Regression tests were added for private media, cross-patient medication duplicate updates, PostgreSQL stale-user fallback, scan upload count limits, and scheduler authentication.
+- GitHub Actions runs are still queued/cancelled while new commits supersede old runs. No passing backend/frontend/Android build result has yet been observed. The final APK/ZIP must not be treated as verified until a current-head workflow run completes successfully.
