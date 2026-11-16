@@ -1303,7 +1303,10 @@ app.post('/api/scan-strip', requireAuth, upload.single('stripImage'), async (req
     }
 
     const imageMime = detectImageMime(fileBuffer);
-    if (!imageMime) return res.status(415).json({ success: false, error: 'Unsupported or invalid image content. Use a valid JPG, PNG, or WEBP image.' });
+    if (!imageMime) {
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(415).json({ success: false, error: 'Unsupported or invalid image content. Use a valid JPG, PNG, or WEBP image.' });
+    }
 
     const sha256 = computeSHA256(fileBuffer);
     let stripData = null;
@@ -2106,7 +2109,10 @@ app.post('/api/scan-medicine', requirePatientAccess, upload.single('prescription
     }
 
     const imageMime = detectImageMime(fileBuffer);
-    if (!imageMime) return res.status(415).json({ success: false, error: 'Unsupported or invalid image content. Use a valid JPG, PNG, or WEBP image.' });
+    if (!imageMime) {
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(415).json({ success: false, error: 'Unsupported or invalid image content. Use a valid JPG, PNG, or WEBP image.' });
+    }
 
     const sha256 = computeSHA256(fileBuffer);
     let geminiOutput = null;
