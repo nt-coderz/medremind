@@ -3,6 +3,7 @@ import { App } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { format } from 'date-fns';
 import { 
+  initNotificationChannels,
   scheduleMedicationDoseNotification,
   cancelMedicationNotifications,
   cancelAllMedicationNotifications, 
@@ -35,6 +36,14 @@ export function MedicineProvider({ children }) {
     }
   });
   const [notifications, setNotifications] = useState([]);
+
+  // Register the native action listener immediately on app mount. Notification
+  // actions can launch a cold app before the signed-in patient's data is loaded.
+  useEffect(() => {
+    initNotificationChannels().catch(error => {
+      console.warn('[Notifications] Early action listener initialization failed:', error);
+    });
+  }, []);
 
   // Load each patient's local health data from a separate namespace.
   // Legacy global keys are deliberately not migrated because they have no
