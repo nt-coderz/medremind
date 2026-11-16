@@ -151,3 +151,11 @@ The following changes have since been committed to `security/medremind-audit-202
 - Android exact-alarm permission is user-controlled. If it is denied, reminders are scheduled as inexact notifications and may be delayed; the app displays the permission state rather than claiming exact delivery.
 - Take/Skip currently update the app's local dose ledger. Server-side dose-log synchronization, conflict handling, and multi-device consistency still need implementation and verification.
 - Device-specific battery optimization, force-stop behavior, OEM background restrictions, reboot restoration, timezone/DST changes, and notification sound/channel behavior have not yet been validated on physical Android devices.
+
+
+### Local account data isolation
+
+- Medication lists, dose history, patient profile, and in-app notifications are now stored under per-user localStorage keys based on the authenticated account ID.
+- The app no longer reads unscoped legacy global health-data keys because those records do not have a trustworthy owner and could be exposed after switching accounts.
+- Explicit logout or an invalidated session clears in-memory health data and cancels pending local notifications. Offline startup does not cancel a previously queued reminder set merely because the API is temporarily unavailable.
+- Existing data in the old unscoped localStorage keys is intentionally not migrated automatically. A safe migration requires an authenticated ownership check; do not assume the old records belong to the current account.
