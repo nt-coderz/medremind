@@ -197,3 +197,12 @@ The following changes have since been committed to `security/medremind-audit-202
 
 
 - Production builds now ignore runtime localStorage API-host overrides entirely; the production backend can only come from the build-time `VITE_API_URL` or the fixed production endpoint. This prevents a localStorage value from redirecting bearer tokens to an attacker-controlled HTTPS server.
+
+
+### Private prescription and scan-image storage
+
+- Removed public static serving of the entire backend uploads directory.
+- New uploads and extracted PDF page images are stored in per-patient directories whose names are derived from a SHA-256 hash of the patient ID.
+- Scan responses now return short-lived signed media URLs; the media route verifies the signature and expiry, validates the filename, and serves only from the matching patient directory with private/no-store cache headers.
+- Added backend regression coverage for signed preview access, tampered/expired-token rejection, cross-patient directory isolation, and denial of the old public `/uploads/*` path.
+- Existing files left in the old shared uploads root are no longer publicly reachable. They need a controlled owner-verified migration if historical prescription previews must be retained.
