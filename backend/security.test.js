@@ -1,5 +1,8 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { app } from './server.js';
 import { generateToken, hashPassword, verifyPassword, verifyToken } from './database/db.js';
 
@@ -77,4 +80,33 @@ test('patient medication endpoints require authentication and reject another pat
 test('scheduler tick rejects requests without its shared secret', async () => {
   const response = await fetch(`${baseUrl}/api/tick`, { method: 'POST' });
   assert.equal(response.status, 401);
+});
+
+
+test('prescription media is not publicly served and signed previews are time-limited', async (t) => {
+  const patientId = `media-test-${crypto.randomUUID()}`;
+  const otherPatientId = `other-media-test-${crypto.randomUUID()}`;
+  const filename = 'private-test-image.png';
+  const patientKey = crypto.createHash('sha256').update(patientId).digest('hex');
+  const patientDir = path.join(process.cwd(), 'uploads', patientKey);
+  fs.mkdirSync(patientDir, { recursive: true });
+  fs.writeFileSync(path.join(patientDir, filename), 'private-test-image');
+  t.after(() => fs.rmSync(patientDir, { recursive: true, force: true }));
+
+  const token = generateToken({ id: patientId, role: 'media', filename }, 1 / 6);
+  const privateResponse = await fetch(`${baseUrl}/api/media/${token}`);
+  assert.equal(privateResponse.status, 200);
+  assert.equal(await privateResponse.text(), 'private-test-image');
+  assert.match(privateResponse.headers.get('cache-control') || '', /no-store/);
+
+  const publicResponse = await fetch(`${baseUrl}/uploads/${filename}`);
+  assert.equal(publicResponse.status, 404);
+
+  const otherPatientToken = generateToken({ id: otherPatientId, role: 'media', filename }, 1 / 6);
+  const otherPatientResponse = await fetch(`${baseUrl}/api/media/${otherPatientToken}`);
+  assert.equal(otherPatientResponse.status, 404);
+
+  const tamperedToken = `${token.slice(0, -1)}x`;
+  const tamperedResponse = await fetch(`${baseUrl}/api/media/${tamperedToken}`);
+  assert.equal(tamperedResponse.status, 401);
 });
