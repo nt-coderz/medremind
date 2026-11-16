@@ -194,3 +194,6 @@ The following changes have since been committed to `security/medremind-audit-202
 
 
 - Removed persistence of the global administrator user directory and activity/audit feed from localStorage. Both are now session-memory data; the protected user list is fetched from the backend, and legacy local caches are cleared.
+
+
+- Production builds now ignore runtime localStorage API-host overrides entirely; the production backend can only come from the build-time `VITE_API_URL` or the fixed production endpoint. This prevents a localStorage value from redirecting bearer tokens to an attacker-controlled HTTPS server.
