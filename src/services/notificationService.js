@@ -64,7 +64,6 @@ export async function initNotificationChannels() {
         name: 'Medication Reminders & Alarms',
         description: 'Critical reminders for prescribed medication timings with alarm sound and vibration',
         importance: 5, // IMPORTANCE_HIGH (Heads-up alert, bypasses basic silence)
-        sound: 'alarm_chime.wav',
         vibration: true,
         visibility: 0, // VISIBILITY_PRIVATE (hide medication details on the lock screen)
         lights: true,
@@ -200,7 +199,6 @@ export async function scheduleMedicationDoseNotification(medicine, timeStr, sche
         allowWhileIdle: true
       },
       isExactNotification: useExactAlarm,
-      sound: 'alarm_chime.wav',
       channelId: 'medremind_alarms_private',
       actionTypeId: 'MED_REMINDER_ACTIONS',
       extra: {
@@ -262,7 +260,6 @@ export async function snoozeNotification(medicine, timeSlot, minutes = 10) {
               at: snoozeDate,
               allowWhileIdle: true
             },
-            sound: 'alarm_chime.wav',
             channelId: 'medremind_alarms_private',
             actionTypeId: 'MED_REMINDER_ACTIONS',
             extra: {
@@ -334,7 +331,6 @@ export async function sendImmediateNotification(title, body) {
             body,
             schedule: { at: new Date(Date.now() + 500) },
             channelId: 'medremind_alarms_private',
-            sound: 'alarm_chime.wav'
           }
         ]
       });
