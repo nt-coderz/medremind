@@ -708,7 +708,7 @@ class DatabaseManager {
     return newMed;
   }
 
-  async updateMedication(id, updates) {
+  async updateMedication(id, updates, patientId = null) {
     if (this.isPostgres && this.pool) {
       try {
         const res = await this.pool.query(
@@ -717,36 +717,44 @@ class DatabaseManager {
              frequency = COALESCE($2, frequency),
              status = COALESCE($3, status),
              updated_at = NOW()
-           WHERE id = $4
+           WHERE id = $4 AND ($5::text IS NULL OR patient_id = $5)
            RETURNING *`,
-          [updates.instructions || null, updates.frequency || null, updates.status || null, id]
+          [updates.instructions || null, updates.frequency || null, updates.status || null, id, patientId]
         );
         if (res.rows.length > 0) return res.rows[0];
+        return null;
       } catch (err) {
         console.error('[Database] PostgreSQL updateMedication error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
       }
     }
 
-    const idx = this.memory.medications.findIndex(m => m.id === id);
+    const idx = this.memory.medications.findIndex(m =>
+      m.id === id && (!patientId || m.patientId === patientId || m.patient_id === patientId)
+    );
     if (idx === -1) return null;
     this.memory.medications[idx] = { ...this.memory.medications[idx], ...updates, updatedAt: new Date().toISOString() };
     this.saveDurableStore();
     return this.memory.medications[idx];
   }
 
-  async deleteMedication(id) {
+  async deleteMedication(id, patientId = null) {
     if (this.isPostgres && this.pool) {
       try {
-        await this.pool.query('DELETE FROM public.medications WHERE id = $1', [id]);
-        return true;
+        const result = await this.pool.query(
+          'DELETE FROM public.medications WHERE id = $1 AND ($2::text IS NULL OR patient_id = $2)',
+          [id, patientId]
+        );
+        return result.rowCount > 0;
       } catch (err) {
         console.error('[Database] PostgreSQL deleteMedication error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
       }
     }
 
-    const idx = this.memory.medications.findIndex(m => m.id === id);
+    const idx = this.memory.medications.findIndex(m =>
+      m.id === id && (!patientId || m.patientId === patientId || m.patient_id === patientId)
+    );
     if (idx === -1) return false;
     this.memory.medications.splice(idx, 1);
     this.memory.schedules = this.memory.schedules.filter(s => s.medicationId !== id);
