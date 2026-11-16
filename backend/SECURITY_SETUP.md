@@ -44,3 +44,15 @@ Copy only the generated `salt:hash` output into the backend host's `ADMIN_PASSWO
 - [ ] Verify a patient cannot request another patient's ID in patient data endpoints.
 - [ ] Verify the scheduler receives 401 without the correct `X-Cron-Secret`.
 - [ ] Run backend and frontend tests/builds and perform Android notification testing on physical devices.
+
+
+## Existing local app data
+
+The security branch now scopes medication records, dose logs, profile data, in-app notifications, food logs, and nutrition targets by authenticated patient ID. It intentionally does not auto-import the old unscoped localStorage keys because the application cannot reliably prove which account owns those records. Before rollout, decide on a safe migration process using a verified account mapping; do not bulk-copy legacy local data into the first account that signs in.
+
+## Android reminder permissions
+
+- The app requests notification display permission and checks Android exact-alarm access.
+- Grant **Alarms & reminders** access in Android app settings if exact timing is required. If access is denied, the app schedules inexact reminders that may be delayed.
+- The app maintains a rolling 14-day one-shot reminder queue and refreshes it at launch and foreground resume. Keep the app opened periodically so the queue can be replenished.
+- Battery optimization, OEM background restrictions, force-stop, reboot, timezone changes, and DST behavior still require physical-device verification. Do not market local notifications as guaranteed alarm-clock delivery.
