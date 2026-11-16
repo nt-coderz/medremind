@@ -7,20 +7,9 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   // Currently authenticated user session
   // STRICT: Default to NULL on initial launch. Fresh launch starts unauthenticated!
-  const [currentUser, setCurrentUser] = useState(() => {
-    const saved = localStorage.getItem('medremind_auth_user');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed && parsed.id && parsed.role) {
-          return parsed;
-        }
-      } catch (e) {
-        return null;
-      }
-    }
-    return null;
-  });
+  // A cached profile is display data, not proof of authentication.
+  // Restore a session only after the server validates its bearer token.
+  const [currentUser, setCurrentUser] = useState(null);
 
   // Registered users database for Admin management (initializes with demo patient if empty)
   const [registeredUsers, setRegisteredUsers] = useState(() => {
@@ -287,23 +276,40 @@ export function AuthProvider({ children }) {
     return { success: true, message: 'Account deletion cancelled successfully.', user: updated };
   };
 
-  // Refresh User Profile from Backend
+  // Restore a session only when the API validates the stored token.
   const refreshUser = async () => {
-    if (isOnline()) {
-      try {
-        const token = localStorage.getItem('medremind_auth_token');
-        if (!token) return;
-        const res = await apiFetch('/auth/me', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        if (res.ok && data.success && data.user) {
-          setCurrentUser(data.user);
-          localStorage.setItem('medremind_auth_user', JSON.stringify(data.user));
-        }
-      } catch (e) {}
+    const token = localStorage.getItem('medremind_auth_token');
+    if (!token) {
+      setCurrentUser(null);
+      localStorage.removeItem('medremind_auth_user');
+      return;
+    }
+    if (!isOnline()) return;
+    try {
+      const res = await apiFetch('/auth/me', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.user) {
+        const safeUser = { ...data.user };
+        delete safeUser.password;
+        delete safeUser.passwordHash;
+        setCurrentUser(safeUser);
+        localStorage.setItem('medremind_auth_user', JSON.stringify(safeUser));
+      } else if (res.status === 401 || res.status === 403) {
+        setCurrentUser(null);
+        localStorage.removeItem('medremind_auth_token');
+        localStorage.removeItem('medremind_auth_user');
+      }
+    } catch {
+      // Keep the user signed out if the server cannot validate the session.
+      setCurrentUser(null);
     }
   };
+
+  useEffect(() => {
+    refreshUser();
+  }, []);
 
   // User medical profile update (offline-first persistent)
   const updateUserMedicalInfo = (allergies, medicalInfo) => {
