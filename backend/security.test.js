@@ -88,10 +88,15 @@ test('prescription media is not publicly served and signed previews are time-lim
   const otherPatientId = `other-media-test-${crypto.randomUUID()}`;
   const filename = 'private-test-image.png';
   const patientKey = crypto.createHash('sha256').update(patientId).digest('hex');
+  const otherPatientKey = crypto.createHash('sha256').update(otherPatientId).digest('hex');
   const patientDir = path.join(process.cwd(), 'uploads', patientKey);
+  const otherPatientDir = path.join(process.cwd(), 'uploads', otherPatientKey);
   fs.mkdirSync(patientDir, { recursive: true });
   fs.writeFileSync(path.join(patientDir, filename), 'private-test-image');
-  t.after(() => fs.rmSync(patientDir, { recursive: true, force: true }));
+  t.after(() => {
+    fs.rmSync(patientDir, { recursive: true, force: true });
+    fs.rmSync(otherPatientDir, { recursive: true, force: true });
+  });
 
   const token = generateToken({ id: patientId, role: 'media', filename }, 1 / 6);
   const privateResponse = await fetch(`${baseUrl}/api/media/${token}`);
@@ -105,6 +110,10 @@ test('prescription media is not publicly served and signed previews are time-lim
   const otherPatientToken = generateToken({ id: otherPatientId, role: 'media', filename }, 1 / 6);
   const otherPatientResponse = await fetch(`${baseUrl}/api/media/${otherPatientToken}`);
   assert.equal(otherPatientResponse.status, 404);
+
+  const expiredToken = generateToken({ id: patientId, role: 'media', filename }, -1);
+  const expiredResponse = await fetch(`${baseUrl}/api/media/${expiredToken}`);
+  assert.equal(expiredResponse.status, 401);
 
   const tamperedToken = `${token.slice(0, -1)}${token.endsWith('a') ? 'b' : 'a'}`;
   const tamperedResponse = await fetch(`${baseUrl}/api/media/${tamperedToken}`);
