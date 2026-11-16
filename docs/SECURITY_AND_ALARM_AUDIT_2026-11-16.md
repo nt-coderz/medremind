@@ -251,3 +251,6 @@ The following changes have since been committed to `security/medremind-audit-202
 
 
 - Restored the bundled `alarm_chime.wav` as the sound for the new private Android reminder channel. The channel uses a new ID so Android does not retain the older channel's immutable sound configuration.
+
+
+- Frontend account-deletion scheduling and cancellation no longer report local-only success when the backend is unavailable. Both operations require a valid server session and confirm the server's returned account state.
