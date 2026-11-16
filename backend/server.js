@@ -755,6 +755,7 @@ app.put('/api/profile/medical', requirePatientAccess, async (req, res) => {
       allergies: cleanAllergies,
       medicalInfo: cleanMedInfo
     });
+    if (!updated) return res.status(404).json({ success: false, error: 'User profile not found.' });
 
     res.json({ success: true, ...updated });
   } catch (err) {
