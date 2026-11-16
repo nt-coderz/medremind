@@ -179,3 +179,6 @@ The following changes have since been committed to `security/medremind-audit-202
 - Medication notification channels now use private lock-screen visibility rather than public content display.
 - Notification action logs no longer print the notification's medication metadata.
 - Backend batch-scan logs no longer print patient names or IDs; registration, medication, food-log, and prescription-mismatch audit records have been reduced to operational identifiers and non-content metadata where possible.
+
+
+- Frontend API URL overrides now reject non-HTTPS remote origins. Plain HTTP is allowed only for localhost during non-production development, preventing the app from attaching bearer tokens to an insecure remote API URL.
