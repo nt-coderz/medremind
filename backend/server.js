@@ -149,7 +149,6 @@ function requirePatientAccess(req, res, next) {
   const requestedIds = [
     req.params.patientId,
     req.params.userId,
-    req.params.id,
     req.query.patientId,
     req.body?.patientId,
     req.body?.patient_id,
@@ -890,7 +889,7 @@ app.get('/api/medications', requirePatientAccess, async (req, res) => {
  */
 app.post('/api/medications', requirePatientAccess, async (req, res) => {
   try {
-    const med = await db.saveMedication(req.body);
+    const med = await db.saveMedication({ ...req.body, patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id });
     await db.logAudit('MEDICATION_CREATED', req.body.patientId || req.user?.id, { medicationId: med.id, name: med.name });
     res.status(201).json({ success: true, medication: med });
   } catch (err) {
@@ -903,7 +902,7 @@ app.post('/api/medications', requirePatientAccess, async (req, res) => {
  * Updates an existing medication
  */
 app.put('/api/medications/:id', requirePatientAccess, async (req, res) => {
-  const updated = await db.updateMedication(req.params.id, req.body);
+  const updated = await db.updateMedication(req.params.id, req.body, req.user.role === 'admin' ? null : req.user.id);
   if (!updated) return res.status(404).json({ success: false, error: 'Medication not found' });
   res.json({ success: true, medication: updated });
 });
@@ -914,7 +913,7 @@ app.put('/api/medications/:id', requirePatientAccess, async (req, res) => {
  */
 app.get('/api/food-logs', requirePatientAccess, async (req, res) => {
   try {
-    const patientId = req.query.patientId || req.user?.id || 'USR-patient';
+    const patientId = req.user.role === 'admin' ? (req.query.patientId || req.user.id) : req.user.id;
     const date = req.query.date || new Date().toISOString().split('T')[0];
     const logs = await db.getFoodLogs(patientId, date);
     res.json({ success: true, logs });
@@ -929,7 +928,7 @@ app.get('/api/food-logs', requirePatientAccess, async (req, res) => {
  */
 app.post('/api/food-logs', requirePatientAccess, async (req, res) => {
   try {
-    const patientId = req.body.patient_id || req.body.patientId || req.user?.id || 'USR-patient';
+    const patientId = req.user.role === 'admin' ? (req.body.patient_id || req.body.patientId || req.user.id) : req.user.id;
     const log = await db.saveFoodLog({ ...req.body, patient_id: patientId });
     await db.logAudit('FOOD_LOG_CREATED', patientId, { logId: log.id, foodName: log.food_name, calories: log.calories });
     res.status(201).json({ success: true, log });
@@ -1014,7 +1013,7 @@ app.get('/api/nutrition-targets', requirePatientAccess, async (req, res) => {
  */
 app.put('/api/nutrition-targets', requirePatientAccess, async (req, res) => {
   try {
-    const patientId = req.body.patientId || req.user?.id || 'USR-patient';
+    const patientId = req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id;
     const targets = req.body.targets || req.body;
     const saved = await db.saveNutritionTargets(patientId, targets);
     res.json({ success: true, targets: saved });
@@ -1028,7 +1027,7 @@ app.put('/api/nutrition-targets', requirePatientAccess, async (req, res) => {
  * Deletes a medication and associated dose schedules
  */
 app.delete('/api/medications/:id', requirePatientAccess, async (req, res) => {
-  const success = await db.deleteMedication(req.params.id);
+  const success = await db.deleteMedication(req.params.id, req.user.role === 'admin' ? null : req.user.id);
   if (!success) return res.status(404).json({ success: false, error: 'Medication not found' });
   res.json({ success: true, message: 'Medication deleted' });
 });
@@ -1048,7 +1047,7 @@ app.get('/api/schedules', requirePatientAccess, async (req, res) => {
  * Creates or updates a dose schedule
  */
 app.post('/api/schedules', requirePatientAccess, async (req, res) => {
-  const sch = await db.saveSchedule(req.body);
+  const sch = await db.saveSchedule({ ...req.body, patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id });
   res.status(201).json({ success: true, schedule: sch });
 });
 
@@ -1071,7 +1070,7 @@ app.post('/api/dose-logs', requirePatientAccess, async (req, res) => {
   try {
     const log = await db.recordDoseLog({
       ...req.body,
-      patientId: req.body.patientId || req.user?.id
+      patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id
     });
     res.status(201).json({ success: true, log });
   } catch (err) {
@@ -1098,7 +1097,7 @@ app.get('/api/consents/:userId', requirePatientAccess, async (req, res) => {
  */
 app.post('/api/consents', requirePatientAccess, async (req, res) => {
   try {
-    const consent = await db.saveConsent(req.body);
+    const consent = await db.saveConsent({ ...req.body, userId: req.user.role === 'admin' ? (req.body.userId || req.user.id) : req.user.id });
     await db.logAudit('STATUTORY_CONSENT_RECORDED', req.body.userId, {
       consentId: consent.id,
       versions: consent.documentVersions
@@ -1114,7 +1113,8 @@ app.post('/api/consents', requirePatientAccess, async (req, res) => {
  * Revokes statutory consent
  */
 app.post('/api/consents/revoke', requirePatientAccess, async (req, res) => {
-  const { userId, reason } = req.body;
+  const { reason } = req.body;
+  const userId = req.user.role === 'admin' ? (req.body.userId || req.user.id) : req.user.id;
   if (!userId) return res.status(400).json({ error: 'User ID required' });
   const success = await db.revokeConsent(userId, reason);
   await db.logAudit('STATUTORY_CONSENT_REVOKED', userId, { reason });
