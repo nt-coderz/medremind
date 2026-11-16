@@ -796,6 +796,23 @@ class DatabaseManager {
   }
 
   async saveSchedule(schData) {
+    if (!schData.patientId || !schData.medicationId) {
+      throw new Error('Patient and medication are required to create a dose schedule.');
+    }
+    if (this.isPostgres && this.pool) {
+      const owner = await this.pool.query(
+        'SELECT id FROM public.medications WHERE id = $1 AND patient_id::text = $2',
+        [schData.medicationId, String(schData.patientId)]
+      );
+      if (owner.rowCount === 0) throw new Error('Medication does not belong to this patient.');
+    } else {
+      const owner = this.memory.medications.find(m =>
+        m.id === schData.medicationId &&
+        String(m.patientId || m.patient_id) === String(schData.patientId)
+      );
+      if (!owner) throw new Error('Medication does not belong to this patient.');
+    }
+
     const id = schData.id || `sch-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
     const timeDisplay = schData.time || '08:00 AM';
     let scheduledTime;
@@ -863,6 +880,23 @@ class DatabaseManager {
   }
 
   async recordDoseLog({ patientId, medicationId, timeSlot, status, dateKey, scheduledTime }) {
+    if (!patientId || !medicationId) {
+      throw new Error('Patient and medication are required to record a dose.');
+    }
+    if (this.isPostgres && this.pool) {
+      const owner = await this.pool.query(
+        'SELECT id FROM public.medications WHERE id = $1 AND patient_id::text = $2',
+        [medicationId, String(patientId)]
+      );
+      if (owner.rowCount === 0) throw new Error('Medication does not belong to this patient.');
+    } else {
+      const owner = this.memory.medications.find(m =>
+        m.id === medicationId &&
+        String(m.patientId || m.patient_id) === String(patientId)
+      );
+      if (!owner) throw new Error('Medication does not belong to this patient.');
+    }
+
     const now = new Date();
     const todayDateKey = now.toISOString().split('T')[0];
     const targetDateKey = dateKey || todayDateKey;
