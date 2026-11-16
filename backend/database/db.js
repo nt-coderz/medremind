@@ -917,7 +917,8 @@ class DatabaseManager {
           [patientId, medicationId, targetDateKey, status.toUpperCase(), `Recorded via ${status}`]
         ).catch(() => {});
       } catch (err) {
-        console.warn('[Database] PostgreSQL recordDoseLog warning:', err.message);
+        console.error('[Database] PostgreSQL recordDoseLog error:', err.message);
+        if (process.env.NODE_ENV === 'production') throw err;
       }
     }
 
