@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { app } from './server.js';
-import { generateToken, hashPassword, verifyPassword, verifyToken } from './database/db.js';
+import { db, generateToken, hashPassword, verifyPassword, verifyToken } from './database/db.js';
 
 let server;
 let baseUrl;
@@ -118,4 +118,56 @@ test('prescription media is not publicly served and signed previews are time-lim
   const tamperedToken = `${token.slice(0, -1)}${token.endsWith('a') ? 'b' : 'a'}`;
   const tamperedResponse = await fetch(`${baseUrl}/api/media/${tamperedToken}`);
   assert.equal(tamperedResponse.status, 401);
+});
+
+
+test('prescription approval cannot modify a medication belonging to another patient', async (t) => {
+  const actorId = `approval-actor-${crypto.randomUUID()}`;
+  const ownerId = `approval-owner-${crypto.randomUUID()}`;
+  const actorEmail = `${actorId}@example.test`;
+  const ownerEmail = `${ownerId}@example.test`;
+  await db.createUser({ id: actorId, name: 'Approval Actor', email: actorEmail, password: 'test-password-actor' });
+  await db.createUser({ id: ownerId, name: 'Medication Owner', email: ownerEmail, password: 'test-password-owner' });
+
+  const storePath = path.join(process.cwd(), 'data', 'medications.json');
+  const hadStore = fs.existsSync(storePath);
+  const originalStore = hadStore ? fs.readFileSync(storePath, 'utf8') : null;
+  const protectedMedication = {
+    id: `protected-med-${crypto.randomUUID()}`,
+    patientId: ownerId,
+    name: 'Owner medicine',
+    instructions: 'Keep original instructions',
+    status: 'ACTIVE'
+  };
+  fs.writeFileSync(storePath, JSON.stringify([protectedMedication], null, 2));
+  t.after(() => {
+    if (hadStore) fs.writeFileSync(storePath, originalStore);
+    else fs.rmSync(storePath, { force: true });
+  });
+
+  const response = await fetch(`${baseUrl}/api/approve-prescriptions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${generateToken({ id: actorId, role: 'patient' })}`
+    },
+    body: JSON.stringify({
+      batchId: 'cross-patient-duplicate-test',
+      documents: [{
+        documentId: 'attacker-controlled-document',
+        approvedMedicines: [{
+          isDuplicateRecord: true,
+          existingMedicationId: protectedMedication.id,
+          name: 'Attacker supplied medicine',
+          instructions: 'Attacker changed instructions'
+        }]
+      }]
+    })
+  });
+
+  assert.equal(response.status, 200);
+  const saved = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+  const stillProtected = saved.find(item => item.id === protectedMedication.id);
+  assert.equal(stillProtected.patientId, ownerId);
+  assert.equal(stillProtected.instructions, 'Keep original instructions');
 });
