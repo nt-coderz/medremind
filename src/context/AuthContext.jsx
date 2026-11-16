@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { generateUserId } from '../utils/idGenerator';
 import { format } from 'date-fns';
 import { apiFetch, isOnline } from '../config/apiConfig';
 
@@ -25,28 +24,14 @@ export function AuthProvider({ children }) {
 
   // Registered users database for Admin management (initializes with demo patient if empty)
   const [registeredUsers, setRegisteredUsers] = useState(() => {
-    const saved = localStorage.getItem('medremind_registered_users');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      } catch (e) { /* ignore */ }
+    try {
+      const saved = JSON.parse(localStorage.getItem('medremind_registered_users') || '[]');
+      return Array.isArray(saved)
+        ? saved.map(({ password, passwordHash, ...safeUser }) => safeUser)
+        : [];
+    } catch {
+      return [];
     }
-    return [
-      {
-        id: "USR-00000000-0000-4000-8000-000000000002",
-        name: "Alex Morgan",
-        email: "alex@medremind.app",
-        phoneNumber: "1234567890",
-        phone: "1234567890",
-        dob: "1992-05-15",
-        gender: "Female",
-        password: "password123",
-        role: "patient",
-        status: "Active",
-        registeredAt: "2026-01-01"
-      }
-    ];
   });
 
   // System audit log for Admin overview (initializes empty)
@@ -95,115 +80,44 @@ export function AuthProvider({ children }) {
   const login = async (identifier, password) => {
     const cleanId = (identifier || '').trim();
     const cleanPwd = (password || '').trim();
+    if (!cleanId || !cleanPwd) {
+      return { success: false, error: 'Email/phone and password are required.' };
+    }
 
-    // 1. Dedicated Admin Authentication Verification (Instant local verify & cloud verify)
-    if (cleanId.toUpperCase() === 'ADMIN') {
-      if (cleanPwd === '123456') {
-        const adminUser = {
-          id: "USR-00000000-0000-4000-8000-000000000001",
-          name: "System Administrator",
-          email: "admin@medremind.internal",
-          role: "admin",
-          status: "Active"
+    // Authentication is server-authoritative. Never authenticate from localStorage.
+    try {
+      const response = await apiFetch('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: cleanId, password: cleanPwd })
+      }, 10000);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.user || !data.token) {
+        return {
+          success: false,
+          error: data.error || 'Unable to sign in. Check your credentials and try again.'
         };
-        // Background token acquisition
-        if (isOnline()) {
-          apiFetch('/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ identifier: 'ADMIN', password: '123456' })
-          }).then(r => r.json()).then(d => {
-            if (d.token) localStorage.setItem('medremind_auth_token', d.token);
-          }).catch(() => {});
-        }
-        setCurrentUser(adminUser);
-        localStorage.setItem('medremind_auth_user', JSON.stringify(adminUser));
-        logActivity('ADMIN_LOGIN', 'System Administrator (Admin)', 'Successful Admin portal login', adminUser.id);
-        return { success: true, user: adminUser };
-      } else {
-        return { success: false, error: 'Invalid administrator credentials. Access denied.' };
       }
+
+      const safeUser = { ...data.user };
+      delete safeUser.password;
+      delete safeUser.passwordHash;
+      localStorage.setItem('medremind_auth_token', data.token);
+      localStorage.setItem('medremind_auth_user', JSON.stringify(safeUser));
+      setCurrentUser(safeUser);
+      setRegisteredUsers(prev => {
+        const next = [safeUser, ...prev.filter(user => user.id !== safeUser.id)];
+        localStorage.setItem('medremind_registered_users', JSON.stringify(next));
+        return next;
+      });
+      logActivity('LOGIN', `${safeUser.name} (${safeUser.role})`, 'User authenticated by MedRemind API', safeUser.id);
+      return { success: true, user: safeUser, token: data.token };
+    } catch (error) {
+      return {
+        success: false,
+        error: 'Sign-in requires a connection to the secure MedRemind server. Please reconnect and try again.'
+      };
     }
-
-    // 2. Cloud API Authentication Attempt
-    if (isOnline()) {
-      try {
-        const response = await apiFetch('/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identifier: cleanId, password: cleanPwd })
-        }, 3500);
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.user) {
-            setCurrentUser(data.user);
-            if (data.token) {
-              localStorage.setItem('medremind_auth_token', data.token);
-            }
-            localStorage.setItem('medremind_auth_user', JSON.stringify(data.user));
-            logActivity('LOGIN', `${data.user.name} (${data.user.role})`, 'User authenticated via MedRemind Cloud API', data.user.id);
-            return { success: true, user: data.user };
-          }
-        }
-      } catch (err) {
-        console.warn('[AuthContext] Cloud login unreachable, verifying via local database:', err.message);
-      }
-    }
-
-    // 3. Resilient Local Authentication Match
-    const allUsers = [...registeredUsers];
-    const savedUsersStr = localStorage.getItem('medremind_registered_users');
-    if (savedUsersStr) {
-      try {
-        const parsed = JSON.parse(savedUsersStr);
-        if (Array.isArray(parsed)) {
-          parsed.forEach(u => {
-            if (!allUsers.some(existing => existing.id === u.id)) allUsers.push(u);
-          });
-        }
-      } catch (e) {}
-    }
-
-    const cleanDigits = cleanId.replace(/\D/g, '');
-    const foundUser = allUsers.find(
-      u => {
-        if (u.role === 'admin') return false;
-        if (u.email && u.email.toLowerCase() === cleanId.toLowerCase()) return true;
-        if (u.id === cleanId) return true;
-        const userPhoneDigits = (u.phoneNumber || u.phone || '').replace(/\D/g, '');
-        if (cleanDigits && userPhoneDigits && (userPhoneDigits === cleanDigits || userPhoneDigits.endsWith(cleanDigits) || cleanDigits.endsWith(userPhoneDigits))) {
-          return true;
-        }
-        return false;
-      }
-    );
-
-    if (foundUser) {
-      if (foundUser.status === 'Suspended') {
-        return { success: false, error: 'This demo account is suspended. Contact administrator.' };
-      }
-      
-      // Verify password
-      if (foundUser.password && cleanPwd) {
-        const isMatch = foundUser.password === cleanPwd || 
-                        cleanPwd === '123456' || 
-                        cleanPwd === 'password123';
-        if (!isMatch) {
-          return { success: false, error: 'Invalid password. Please verify and try again.' };
-        }
-      }
-
-      setCurrentUser(foundUser);
-      localStorage.setItem('medremind_auth_user', JSON.stringify(foundUser));
-      logActivity('LOGIN', `${foundUser.name} (${foundUser.role})`, 'User authenticated successfully', foundUser.id);
-      return { success: true, user: foundUser };
-    }
-
-    return {
-      success: false,
-      error: 'Invalid credentials. Please verify your Email/Phone number and password.'
-    };
   };
 
   /**
@@ -220,79 +134,50 @@ export function AuthProvider({ children }) {
     const cleanDob = (dob || '').toString().trim();
     const cleanGender = (gender || '').toString().trim();
     const cleanPhone = (phone || phoneNumber || '').toString().trim();
-    const cleanPassword = (password || '').trim() || 'password123';
+    const cleanPassword = (password || '').trim();
 
-    // 1. Cloud API Registration Attempt
-    if (isOnline()) {
-      try {
-        const response = await apiFetch('/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            name: cleanName, 
-            dob: cleanDob, 
-            gender: cleanGender, 
-            email: cleanEmail, 
-            phone: cleanPhone, 
-            password: cleanPassword, 
-            role: 'patient' 
-          })
-        }, 4000);
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.user) {
-            const userWithCreds = {
-              ...data.user,
-              password: cleanPassword,
-              phone: cleanPhone,
-              phoneNumber: cleanPhone
-            };
-            setRegisteredUsers(prev => {
-              const updated = [userWithCreds, ...prev.filter(u => u.id !== userWithCreds.id)];
-              localStorage.setItem('medremind_registered_users', JSON.stringify(updated));
-              return updated;
-            });
-            setCurrentUser(userWithCreds);
-            if (data.token) localStorage.setItem('medremind_auth_token', data.token);
-            localStorage.setItem('medremind_auth_user', JSON.stringify(userWithCreds));
-            logActivity('REGISTRATION', `${userWithCreds.name} (${userWithCreds.role})`, `Account created with ID ${userWithCreds.id}`, userWithCreds.id);
-            return { success: true, user: userWithCreds, token: data.token };
-          }
-        }
-      } catch (err) {
-        console.warn('[AuthContext] Cloud registration unreachable, activating locally:', err.message);
-      }
+    if (!cleanName || !cleanDob || !cleanGender || !cleanEmail || !cleanPhone || cleanPassword.length < 8) {
+      return { success: false, error: 'Complete all required fields and use a password of at least 8 characters.' };
     }
 
-    // 2. Guaranteed Resilient Registration (Immediately creates and activates the user)
-    const newUser = {
-      id: generateUserId('USR'),
-      name: cleanName,
-      dob: cleanDob,
-      gender: cleanGender,
-      email: cleanEmail,
-      phone: cleanPhone,
-      phoneNumber: cleanPhone,
-      password: cleanPassword,
-      role: 'patient',
-      status: "Active",
-      registeredAt: format(new Date(), 'yyyy-MM-dd')
-    };
+    try {
+      const response = await apiFetch('/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: cleanName,
+          dob: cleanDob,
+          gender: cleanGender,
+          email: cleanEmail,
+          phone: cleanPhone,
+          password: cleanPassword,
+          role: 'patient'
+        })
+      }, 10000);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.user || !data.token) {
+        return { success: false, error: data.error || 'Registration could not be completed.' };
+      }
 
-    setRegisteredUsers(prev => {
-      const updated = [newUser, ...prev.filter(u => u.id !== newUser.id && u.email !== newUser.email)];
-      localStorage.setItem('medremind_registered_users', JSON.stringify(updated));
-      return updated;
-    });
-    setCurrentUser(newUser);
-    localStorage.setItem('medremind_auth_user', JSON.stringify(newUser));
-    logActivity('REGISTRATION', `${newUser.name} (${newUser.role})`, `Account created with ID ${newUser.id}`, newUser.id);
-
-    return {
-      success: true,
-      user: newUser
-    };
+      const safeUser = { ...data.user };
+      delete safeUser.password;
+      delete safeUser.passwordHash;
+      localStorage.setItem('medremind_auth_token', data.token);
+      localStorage.setItem('medremind_auth_user', JSON.stringify(safeUser));
+      setCurrentUser(safeUser);
+      setRegisteredUsers(prev => {
+        const next = [safeUser, ...prev.filter(user => user.id !== safeUser.id)];
+        localStorage.setItem('medremind_registered_users', JSON.stringify(next));
+        return next;
+      });
+      logActivity('REGISTRATION', `${safeUser.name} (${safeUser.role})`, `Account created with ID ${safeUser.id}`, safeUser.id);
+      return { success: true, user: safeUser, token: data.token };
+    } catch {
+      return {
+        success: false,
+        error: 'Registration requires a connection to the secure MedRemind server. No local account was created.'
+      };
+    }
   };
 
   /**
