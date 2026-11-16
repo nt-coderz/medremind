@@ -1,13 +1,14 @@
 name: Security validation
 
 on:
-  push:
-    branches:
-      - security/**
   pull_request:
     branches:
       - main
   workflow_dispatch:
+
+concurrency:
+  group: security-validation-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
