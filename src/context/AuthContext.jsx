@@ -315,6 +315,28 @@ export function AuthProvider({ children }) {
     refreshUser();
   }, [refreshUser]);
 
+  const refreshUsers = useCallback(async () => {
+    if (currentUser?.role !== 'admin') return;
+    const token = localStorage.getItem('medremind_auth_token');
+    if (!token) return;
+    try {
+      const response = await apiFetch('/users', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !Array.isArray(data.users)) return;
+      const safeUsers = data.users.map(({ password, passwordHash, ...user }) => user);
+      setRegisteredUsers(safeUsers);
+      localStorage.setItem('medremind_registered_users', JSON.stringify(safeUsers));
+    } catch (error) {
+      console.warn('[AuthContext] Could not refresh administrator user list:', error);
+    }
+  }, [currentUser?.role]);
+
+  useEffect(() => {
+    if (currentUser?.role === 'admin') refreshUsers();
+  }, [currentUser?.role, refreshUsers]);
+
   // User medical profile update (offline-first persistent)
   const updateUserMedicalInfo = (allergies, medicalInfo) => {
     setCurrentUser(prev => {
@@ -334,10 +356,32 @@ export function AuthProvider({ children }) {
     });
   };
 
-  // Admin user status modification
-  const updateUserStatus = (userId, newStatus) => {
-    setRegisteredUsers(prev => prev.map(u => u.id === userId ? { ...u, status: newStatus } : u));
-    logActivity('ADMIN_ACTION', 'System Administrator', `Updated status of user ${userId} to ${newStatus}`, userId);
+  // Admin user status changes are server-authoritative.
+  const updateUserStatus = async (userId, newStatus) => {
+    if (currentUser?.role !== 'admin') {
+      return { success: false, error: 'Administrator access required.' };
+    }
+    const token = localStorage.getItem('medremind_auth_token');
+    if (!token) return { success: false, error: 'Administrator session is missing.' };
+    try {
+      const response = await apiFetch(`/users/${encodeURIComponent(userId)}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ status: newStatus })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        return { success: false, error: data.error || 'Could not update account status.' };
+      }
+      setRegisteredUsers(prev => prev.map(user => user.id === userId ? { ...user, status: newStatus } : user));
+      logActivity('ADMIN_ACTION', 'System Administrator', `Updated status of user ${userId} to ${newStatus}`, userId);
+      return { success: true, user: data.user };
+    } catch {
+      return { success: false, error: 'Account status changes require a connection to the secure server.' };
+    }
   };
 
   return (
@@ -357,6 +401,7 @@ export function AuthProvider({ children }) {
       scheduleDeletion,
       cancelDeletion,
       refreshUser,
+      refreshUsers,
       logActivity
     }}>
       {children}
