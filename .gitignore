@@ -1,0 +1,68 @@
+# === Environment & Secrets ===
+.env
+.env*.local
+*.env
+backend/.env
+backend/.env*.local
+*.pem
+*.crt
+backend/database/supabase-ca.pem
+*.db_password
+.db_password
+backend/.db_password
+
+# === Patient Data & Prescription Uploads (Privacy & HIPAA) ===
+backend/data/*.json
+backend/data/.auth_secret
+backend/data/backups/
+backups/
+backend/data/*.db
+backend/data/*.sqlite
+backend/uploads/*
+!backend/uploads/.gitkeep
+!backend/data/.gitkeep
+
+# === OCR Model Binaries ===
+*.traineddata
+eng.traineddata
+
+# === Dependencies ===
+node_modules/
+backend/node_modules/
+
+# === Build Outputs ===
+dist/
+dist-ssr/
+build/
+*.local
+
+# === Android / Capacitor Native Artifacts ===
+*.apk
+*.aab
+*.dex
+*.class
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/capacitor-cordova-android-plugins/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+
+# === Logs & Editor Files ===
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
