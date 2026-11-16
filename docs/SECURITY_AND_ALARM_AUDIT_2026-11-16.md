@@ -159,3 +159,7 @@ The following changes have since been committed to `security/medremind-audit-202
 - The app no longer reads unscoped legacy global health-data keys because those records do not have a trustworthy owner and could be exposed after switching accounts.
 - Explicit logout or an invalidated session clears in-memory health data and cancels pending local notifications. Offline startup does not cancel a previously queued reminder set merely because the API is temporarily unavailable.
 - Existing data in the old unscoped localStorage keys is intentionally not migrated automatically. A safe migration requires an authenticated ownership check; do not assume the old records belong to the current account.
+
+
+- Nutrition food logs and nutrition targets were also moved to per-patient localStorage namespaces. Nutrition API requests now rely on the authenticated session rather than the legacy `USR-patient` fallback identity.
+- As with the medication store, old unscoped nutrition cache entries are not automatically migrated because their ownership cannot be established safely.
