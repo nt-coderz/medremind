@@ -850,6 +850,7 @@ class DatabaseManager {
             schData.scheduledDose || '1 Dose'
           ]
         );
+        if (!res.rows[0]) throw new Error('Schedule ID already belongs to another patient.');
         return res.rows[0];
       } catch (err) {
         console.error('[Database] PostgreSQL saveSchedule error:', err.message);
