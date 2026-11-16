@@ -254,7 +254,7 @@ class DatabaseManager {
           `SELECT user_id as id, email, full_name as name, dob, gender, phone_number as "phoneNumber", allergies, medical_info as "medicalInfo", role, status, password_hash as "passwordHash", registered_at as "registeredAt",
                   scheduled_deletion_at as "scheduledDeletionAt", deletion_requested_by as "deletionRequestedBy", deletion_reason as "deletionReason"
            FROM public.profiles
-           WHERE LOWER(email) = LOWER($1) OR user_id = $1 OR phone_number = $1 OR (LOWER($1) = 'admin' AND role = 'admin')
+           WHERE LOWER(email) = LOWER($1) OR user_id = $1 OR phone_number = $1
            LIMIT 1`,
           [clean]
         );
@@ -359,7 +359,10 @@ class DatabaseManager {
     }
 
     const uniqueId = userData.id || `USR-${crypto.randomUUID()}`;
-    const pwdHash = userData.passwordHash || hashPassword(userData.password || 'password123');
+    if (!userData.password && !userData.passwordHash) {
+      throw new Error('A password is required when creating a user account.');
+    }
+    const pwdHash = userData.passwordHash || hashPassword(userData.password);
     const role = 'patient';
     const regDate = new Date().toISOString().split('T')[0];
     const dob = userData.dob || null;
@@ -949,7 +952,7 @@ class DatabaseManager {
              ($1, $2, $3, NOW(), $4, NOW(), $5)
            ON CONFLICT DO NOTHING`,
           [patientId, medicationId, targetDateKey, status.toUpperCase(), `Recorded via ${status}`]
-        ).catch(() => {});
+        );
       } catch (err) {
         console.error('[Database] PostgreSQL recordDoseLog error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
