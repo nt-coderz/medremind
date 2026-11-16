@@ -260,7 +260,7 @@ class DatabaseManager {
            LIMIT 1`,
           [clean]
         );
-        if (res.rows.length > 0) return res.rows[0];
+        return res.rows[0] || null;
       } catch (err) {
         console.error('[Database] PostgreSQL findUser error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
@@ -288,7 +288,7 @@ class DatabaseManager {
            FROM public.profiles WHERE user_id = $1 LIMIT 1`,
           [id]
         );
-        if (res.rows.length > 0) return res.rows[0];
+        return res.rows[0] || null;
       } catch (err) {
         console.error('[Database] PostgreSQL findUserById error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
@@ -321,12 +321,11 @@ class DatabaseManager {
            RETURNING user_id as id, email, full_name as name, allergies, medical_info as "medicalInfo"`,
           [safeAllergies, JSON.stringify(safeMedicalInfo), userId]
         );
-        if (res.rows.length > 0) {
-          return {
-            allergies: res.rows[0].allergies || [],
-            medicalInfo: res.rows[0].medicalInfo || {}
-          };
-        }
+        if (!res.rows.length) return null;
+        return {
+          allergies: res.rows[0].allergies || [],
+          medicalInfo: res.rows[0].medicalInfo || {}
+        };
       } catch (err) {
         console.error('[Database] PostgreSQL updateMedicalInfo error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
