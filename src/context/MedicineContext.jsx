@@ -222,7 +222,7 @@ export function MedicineProvider({ children }) {
         } else {
           // Reactivate alarms for all time slots
           const slots = m.times && m.times.length > 0 ? m.times : (m.timeSlots || ['08:00 AM']);
-          slots.forEach(t => scheduleMedicationDoseNotification({ ...m, status: 'Active' }, t, m.id));
+          slots.forEach(t => scheduleMedicationDoseNotification({ ...m, patientId: storageScope, status: 'Active' }, t, m.id));
           addNotification({
             title: `Medication Reactivated: ${m.name}`,
             message: `${m.name} is active. Daily reminders have been rescheduled.`,
@@ -270,7 +270,7 @@ export function MedicineProvider({ children }) {
     });
     // Schedule native reminders for arbitrary time slots
     const slots = newMed.times && newMed.times.length > 0 ? newMed.times : (newMed.timeSlots || ['08:00 AM']);
-    slots.forEach(t => scheduleMedicationDoseNotification(newMed, t, newMed.id));
+    slots.forEach(t => scheduleMedicationDoseNotification({ ...newMed, patientId: storageScope }, t, newMed.id));
     return newMed;
   };
 
@@ -281,7 +281,7 @@ export function MedicineProvider({ children }) {
         if (updated.status === 'Active') {
           cancelMedicationNotifications(m.id);
           const slots = updated.times && updated.times.length > 0 ? updated.times : (updated.timeSlots || ['08:00 AM']);
-          slots.forEach(t => scheduleMedicationDoseNotification(updated, t, updated.id));
+          slots.forEach(t => scheduleMedicationDoseNotification({ ...updated, patientId: storageScope }, t, updated.id));
         }
         return updated;
       }
@@ -340,7 +340,7 @@ export function MedicineProvider({ children }) {
 
       // Reschedule reminders
       if (updatedMed.times && Array.isArray(updatedMed.times)) {
-        updatedMed.times.forEach(t => scheduleMedicationDoseNotification(updatedMed, t, updatedMed.id));
+        updatedMed.times.forEach(t => scheduleMedicationDoseNotification({ ...updatedMed, patientId: storageScope }, t, updatedMed.id));
       }
       return updatedMed;
     }
@@ -378,7 +378,7 @@ export function MedicineProvider({ children }) {
     });
     // Schedule native reminders for approved prescription
     if (approvedMed.times && Array.isArray(approvedMed.times)) {
-      approvedMed.times.forEach(t => scheduleMedicationDoseNotification(approvedMed, t, approvedMed.id));
+      approvedMed.times.forEach(t => scheduleMedicationDoseNotification({ ...approvedMed, patientId: storageScope }, t, approvedMed.id));
     }
     return approvedMed;
   };
@@ -405,12 +405,13 @@ export function MedicineProvider({ children }) {
     }
     setNotificationActionHandler(async (action) => {
       const extra = action.notification?.extra || {};
+      if (!storageScope || !extra.patientId || String(extra.patientId) !== String(storageScope)) return;
       const med = medicines.find(item => item.id === extra.medicineId);
       if (!med || med.status === 'Inactive') return;
 
       const timeSlot = extra.timeSlot || med.timeSlots?.[0] || extra.scheduledTime || 'Dose';
       if (action.actionId === 'SNOOZE_10') {
-        await snoozeNotification(med, timeSlot, 10, extra.occurrenceDate || todayKey);
+        await snoozeNotification({ ...med, patientId: storageScope }, timeSlot, 10, extra.occurrenceDate || todayKey);
         return;
       }
       if (action.actionId !== 'TAKE' && action.actionId !== 'SKIP') return;
@@ -479,7 +480,7 @@ export function MedicineProvider({ children }) {
           const slots = med.times?.length ? med.times : (med.timeSlots || ['08:00 AM']);
           for (const time of slots) {
             if (disposed) return;
-            await scheduleMedicationDoseNotification(med, time, med.id);
+            await scheduleMedicationDoseNotification({ ...med, patientId: storageScope }, time, med.id);
           }
         }
       } catch (error) {
