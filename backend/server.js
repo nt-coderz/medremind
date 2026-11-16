@@ -931,7 +931,7 @@ app.post('/api/food-logs', requirePatientAccess, async (req, res) => {
  */
 app.delete('/api/food-logs/:id', requirePatientAccess, async (req, res) => {
   try {
-    const patientId = req.query.patientId || req.user?.id || 'USR-patient';
+    const patientId = req.user.role === 'admin' ? (req.query.patientId || req.user.id) : req.user.id;
     const success = await db.deleteFoodLog(req.params.id, patientId);
     if (!success) {
       return res.status(404).json({ success: false, error: 'Food log not found' });
@@ -1278,7 +1278,7 @@ const chatLimiter = rateLimit({
  * Conversational Medi assistant powered by Gemini with multi-model fallback.
  * Protected by JWT auth, rate limited.
  */
-app.post('/api/chat', chatLimiter, async (req, res) => {
+app.post('/api/chat', requireAuth, chatLimiter, async (req, res) => {
   const { message, history } = req.body;
   if (!message || typeof message !== 'string' || message.trim() === '') {
     return res.status(400).json({ success: false, error: 'Message cannot be empty.' });
