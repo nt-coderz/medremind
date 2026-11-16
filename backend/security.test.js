@@ -17,9 +17,12 @@ before(async () => {
 });
 
 after(async () => {
-  if (server) await new Promise((resolve, reject) =>
-    server.close(error => error ? reject(error) : resolve())
-  );
+  if (server) {
+    server.closeAllConnections();
+    await new Promise((resolve, reject) =>
+      server.close(error => error ? reject(error) : resolve())
+    );
+  }
 });
 
 test('password verification accepts only the exact PBKDF2 password', () => {
