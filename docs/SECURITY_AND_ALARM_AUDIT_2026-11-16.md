@@ -172,3 +172,10 @@ The following changes have since been committed to `security/medremind-audit-202
 - Database food-log create/update and delete operations now require a patient ID and constrain updates/deletes by both record ID and patient ownership.
 - Food-log ID collisions across different patients are rejected rather than updating another patient's record.
 - Administrator user-directory loading and status changes now use the protected backend endpoints rather than local-only status updates.
+
+
+### Sensitive-data minimization
+
+- Medication notification channels now use private lock-screen visibility rather than public content display.
+- Notification action logs no longer print the notification's medication metadata.
+- Backend batch-scan logs no longer print patient names or IDs; registration, medication, food-log, and prescription-mismatch audit records have been reduced to operational identifiers and non-content metadata where possible.
