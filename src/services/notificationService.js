@@ -47,9 +47,18 @@ export function parseArbitraryTime(timeStr) {
  */
 let channelsInitialized = false;
 let notificationActionHandler = null;
+const pendingNotificationActions = [];
 
 export function setNotificationActionHandler(handler) {
   notificationActionHandler = typeof handler === 'function' ? handler : null;
+  if (notificationActionHandler && pendingNotificationActions.length) {
+    const queuedActions = pendingNotificationActions.splice(0);
+    queuedActions.forEach(action => {
+      Promise.resolve(notificationActionHandler(action)).catch(error => {
+        console.error('[Notifications] Queued action handler failed:', error);
+      });
+    });
+  }
 }
 
 export async function initNotificationChannels() {
@@ -88,7 +97,14 @@ export async function initNotificationChannels() {
       await LocalNotifications.addListener('localNotificationActionPerformed', async (action) => {
         console.log('[Notification Action Received]', action.actionId);
         try {
-          await notificationActionHandler?.(action);
+          if (notificationActionHandler) {
+            await notificationActionHandler(action);
+          } else {
+            // The app may be launched from a notification before account data hydrates.
+            // Keep a small in-memory queue so the action is not silently discarded.
+            if (pendingNotificationActions.length >= 20) pendingNotificationActions.shift();
+            pendingNotificationActions.push(action);
+          }
         } catch (error) {
           console.error('[Notifications] Action handler failed:', error);
         }
