@@ -168,92 +168,76 @@ export function AuthProvider({ children }) {
     window.dispatchEvent(new Event('medremind:session-invalidated'));
   };
 
-  // Schedule Account Deletion with 24-Hour Grace Period
+  // Account deletion state is server-authoritative; never simulate a successful request offline.
   const scheduleDeletion = async (reason = 'User requested account closure') => {
-    const scheduledAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    if (isOnline()) {
-      try {
-        const token = localStorage.getItem('medremind_auth_token');
-        const res = await apiFetch('/auth/schedule-deletion', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-          },
-          body: JSON.stringify({ reason })
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const updated = {
-            ...currentUser,
-            status: 'Pending_Deletion',
-            scheduledDeletionAt: data.user?.scheduledDeletionAt || scheduledAt,
-            deletionRequestedBy: currentUser?.id,
-            deletionReason: reason
-          };
-          setCurrentUser(updated);
-          localStorage.setItem('medremind_auth_user', JSON.stringify(updated));
-          return { success: true, message: data.message, user: updated };
-        }
-      } catch (err) {
-        console.warn('[AuthContext] Cloud schedule-deletion failed, applying locally:', err.message);
-      }
-    }
+    if (!currentUser) return { success: false, error: 'Please sign in before requesting account deletion.' };
+    const token = localStorage.getItem('medremind_auth_token');
+    if (!token) return { success: false, error: 'Your secure session is missing. Please sign in again.' };
 
-    // Local state fallback
-    const updated = {
-      ...currentUser,
-      status: 'Pending_Deletion',
-      scheduledDeletionAt: scheduledAt,
-      deletionRequestedBy: currentUser?.id,
-      deletionReason: reason
-    };
-    setCurrentUser(updated);
-    localStorage.setItem('medremind_auth_user', JSON.stringify(updated));
-    return { success: true, message: 'Account scheduled for deletion in 24 hours.', user: updated };
+    try {
+      const res = await apiFetch('/auth/schedule-deletion', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ reason })
+      }, 10000);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success || !data.user) {
+        return { success: false, error: data.error || 'The server could not schedule account deletion.' };
+      }
+
+      const updated = {
+        ...currentUser,
+        status: data.user.status || 'Pending_Deletion',
+        scheduledDeletionAt: data.user.scheduledDeletionAt || null,
+        deletionRequestedBy: data.user.deletionRequestedBy || currentUser.id,
+        deletionReason: data.user.deletionReason || reason
+      };
+      setCurrentUser(updated);
+      localStorage.setItem('medremind_auth_user', JSON.stringify(updated));
+      return { success: true, message: data.message, user: updated };
+    } catch {
+      return {
+        success: false,
+        error: 'Account deletion requires a connection to the secure server. No local deletion change was made.'
+      };
+    }
   };
 
-  // Cancel Account Deletion
+  // Cancelling a deletion request is also server-authoritative.
   const cancelDeletion = async () => {
-    if (isOnline()) {
-      try {
-        const token = localStorage.getItem('medremind_auth_token');
-        const res = await apiFetch('/auth/cancel-deletion', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-          }
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const updated = {
-            ...currentUser,
-            status: 'Active',
-            scheduledDeletionAt: null,
-            deletionRequestedBy: null,
-            deletionReason: null
-          };
-          setCurrentUser(updated);
-          localStorage.setItem('medremind_auth_user', JSON.stringify(updated));
-          return { success: true, message: data.message, user: updated };
-        }
-      } catch (err) {
-        console.warn('[AuthContext] Cloud cancel-deletion failed, applying locally:', err.message);
-      }
-    }
+    if (!currentUser) return { success: false, error: 'Please sign in before changing account deletion status.' };
+    const token = localStorage.getItem('medremind_auth_token');
+    if (!token) return { success: false, error: 'Your secure session is missing. Please sign in again.' };
 
-    // Local state fallback
-    const updated = {
-      ...currentUser,
-      status: 'Active',
-      scheduledDeletionAt: null,
-      deletionRequestedBy: null,
-      deletionReason: null
-    };
-    setCurrentUser(updated);
-    localStorage.setItem('medremind_auth_user', JSON.stringify(updated));
-    return { success: true, message: 'Account deletion cancelled successfully.', user: updated };
+    try {
+      const res = await apiFetch('/auth/cancel-deletion', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      }, 10000);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success || !data.user) {
+        return { success: false, error: data.error || 'The server could not cancel account deletion.' };
+      }
+
+      const updated = {
+        ...currentUser,
+        status: data.user.status || 'Active',
+        scheduledDeletionAt: data.user.scheduledDeletionAt || null,
+        deletionRequestedBy: data.user.deletionRequestedBy || null,
+        deletionReason: data.user.deletionReason || null
+      };
+      setCurrentUser(updated);
+      localStorage.setItem('medremind_auth_user', JSON.stringify(updated));
+      return { success: true, message: data.message, user: updated };
+    } catch {
+      return {
+        success: false,
+        error: 'Changing account deletion status requires a connection to the secure server. No local change was made.'
+      };
+    }
   };
 
   // Restore a session only when the API validates the stored token.
