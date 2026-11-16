@@ -284,7 +284,11 @@ export function AuthProvider({ children }) {
       localStorage.removeItem('medremind_auth_user');
       return;
     }
-    if (!isOnline()) return;
+    if (!isOnline()) {
+      setCurrentUser(null);
+      localStorage.removeItem('medremind_auth_user');
+      return;
+    }
     try {
       const res = await apiFetch('/auth/me', {
         headers: { 'Authorization': `Bearer ${token}` }
