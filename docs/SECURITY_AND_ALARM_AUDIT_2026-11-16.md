@@ -209,3 +209,17 @@ The following changes have since been committed to `security/medremind-audit-202
 
 
 - Multipart scan uploads are now limited to one JPG/PNG/WEBP image of at most 15 MB; unsupported MIME types are rejected before OCR processing.
+
+
+### Additional authorization and upload validation
+
+- Batch prescription approval now updates an existing duplicate medication only when its patient ID matches the authenticated/selected patient. A regression test exercises an attempted cross-patient duplicate update.
+- Scan-strip and single-prescription image endpoints now inspect the actual file signature (JPEG, PNG, or WEBP) instead of trusting a client-supplied MIME type; Gemini receives the detected MIME type.
+- Batch document scans validate PDF magic bytes or the actual image signature and require the file extension to match the content before writing the upload to disk.
+- Rejected invalid image uploads are deleted instead of being left in private storage.
+
+### Build artifact automation
+
+- GitHub Actions now includes an Android debug APK build using Node 22 and Java 17, Capacitor sync, and Gradle `assembleDebug`.
+- On success, the workflow publishes a 14-day artifact containing `app-debug.apk` and a ZIP of the tracked source tree.
+- This is a debug/test APK, not a signed Play Store release. A production release requires a separately provisioned signing key and secure signing configuration.
