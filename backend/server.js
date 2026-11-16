@@ -177,14 +177,16 @@ function requireSchedulerSecret(req, res, next) {
 const uploadsDir = path.join(__dirname, 'uploads');
 const dataDir = path.join(__dirname, 'data');
 
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true, mode: 0o700 });
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+try { fs.chmodSync(uploadsDir, 0o700); fs.chmodSync(dataDir, 0o700); } catch {}
 
 function getPatientUploadDir(patientId) {
   if (!patientId) throw new Error('Authenticated patient ID is required for file storage.');
   const patientKey = crypto.createHash('sha256').update(String(patientId)).digest('hex');
   const directory = path.join(uploadsDir, patientKey);
-  fs.mkdirSync(directory, { recursive: true });
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(directory, 0o700); } catch {}
   return directory;
 }
 
