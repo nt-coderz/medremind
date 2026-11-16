@@ -40,6 +40,15 @@ test('JWT verification rejects invalid, expired, and unsigned tokens', () => {
   assert.equal(verifyToken(generateToken({ id: 'expired-user', role: 'patient' }, -1)), null);
 });
 
+test('legacy hardcoded administrator credentials are rejected', async () => {
+  const response = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier: 'ADMIN', password: '123456' })
+  });
+  assert.equal(response.status, 401);
+});
+
 test('admin user directory rejects unauthenticated and patient requests', async () => {
   const anonymous = await fetch(`${baseUrl}/api/users`);
   assert.equal(anonymous.status, 401);
