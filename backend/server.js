@@ -194,6 +194,14 @@ function createPrivateMediaUrl(patientId, filePath) {
   return `/api/media/${token}`;
 }
 
+function detectImageMime(buffer) {
+  if (!Buffer.isBuffer(buffer)) return null;
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
 // Short-lived signed image URLs allow native/browser image elements to load
 // previews without exposing the uploads directory or requiring custom headers.
 app.get('/api/media/:token', (req, res) => {
@@ -1294,6 +1302,9 @@ app.post('/api/scan-strip', requireAuth, upload.single('stripImage'), async (req
       return res.status(400).json({ error: 'No medicine strip image provided' });
     }
 
+    const imageMime = detectImageMime(fileBuffer);
+    if (!imageMime) return res.status(415).json({ success: false, error: 'Unsupported or invalid image content. Use a valid JPG, PNG, or WEBP image.' });
+
     const sha256 = computeSHA256(fileBuffer);
     let stripData = null;
     let engineUsed = 'TESSERACT';
@@ -1301,7 +1312,7 @@ app.post('/api/scan-strip', requireAuth, upload.single('stripImage'), async (req
 
     if (mode === 'online') {
       try {
-        stripData = await analyzeStripWithGemini(fileBuffer, 'image/jpeg');
+        stripData = await analyzeStripWithGemini(fileBuffer, imageMime);
         engineUsed = 'GEMINI';
       } catch (err) {
         console.warn('[Scan Strip] Gemini technical fallback:', err.message);
@@ -1524,6 +1535,18 @@ app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
 
       if (fileBuffer.length === 0) {
         return res.status(400).json({ error: `File "${fileName}" appears empty or corrupted.` });
+      }
+
+      const isPdf = fileExt === 'pdf';
+      const imageMime = detectImageMime(fileBuffer);
+      if (isPdf ? fileBuffer.toString('ascii', 0, 5) !== '%PDF-' : !imageMime) {
+        return res.status(415).json({ success: false, error: `File "${fileName}" does not contain a valid supported document.` });
+      }
+      const extensionMatches = isPdf ||
+        (['jpg', 'jpeg'].includes(fileExt) && imageMime === 'image/jpeg') ||
+        (fileExt === 'png' && imageMime === 'image/png');
+      if (!extensionMatches) {
+        return res.status(415).json({ success: false, error: `File "${fileName}" extension does not match its actual content.` });
       }
 
       // Compute SHA-256
@@ -2082,6 +2105,9 @@ app.post('/api/scan-medicine', requirePatientAccess, upload.single('prescription
       return res.status(400).json({ error: 'No prescription image provided' });
     }
 
+    const imageMime = detectImageMime(fileBuffer);
+    if (!imageMime) return res.status(415).json({ success: false, error: 'Unsupported or invalid image content. Use a valid JPG, PNG, or WEBP image.' });
+
     const sha256 = computeSHA256(fileBuffer);
     let geminiOutput = null;
     let engineUsed = 'TESSERACT';
@@ -2089,7 +2115,7 @@ app.post('/api/scan-medicine', requirePatientAccess, upload.single('prescription
 
     if (mode === 'online') {
       try {
-        geminiOutput = await analyzePrescriptionWithGemini(fileBuffer, 'image/jpeg');
+        geminiOutput = await analyzePrescriptionWithGemini(fileBuffer, imageMime);
         engineUsed = 'GEMINI';
       } catch (err) {
         console.warn('Gemini technical failure:', err.message);
