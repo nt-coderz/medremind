@@ -2316,6 +2316,19 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       if (!process.env.DATABASE_URL || !db.isPostgres) {
         throw new Error('Production startup blocked: a configured PostgreSQL DATABASE_URL is required.');
       }
+      if (!process.env.AUTH_SECRET || Buffer.byteLength(process.env.AUTH_SECRET) < 32) {
+        throw new Error('Production startup blocked: AUTH_SECRET must be configured with at least 32 random bytes.');
+      }
+      if (!process.env.ADMIN_EMAIL ||
+          !/^[a-f0-9]{32}:[a-f0-9]{128}$/i.test(process.env.ADMIN_PASSWORD_HASH || '')) {
+        throw new Error('Production startup blocked: ADMIN_EMAIL and a valid PBKDF2 ADMIN_PASSWORD_HASH are required.');
+      }
+      if (!process.env.CRON_SECRET || Buffer.byteLength(process.env.CRON_SECRET) < 32) {
+        throw new Error('Production startup blocked: CRON_SECRET must contain at least 32 random bytes.');
+      }
+      if (!(process.env.ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean).length) {
+        throw new Error('Production startup blocked: configure exact ALLOWED_ORIGINS for the deployed frontends.');
+      }
       const health = await db.checkHealth();
       if (health.status !== 'connected' || health.type !== 'Supabase PostgreSQL') {
         throw new Error(`Production startup blocked: PostgreSQL health check failed (${health.error || health.status}).`);
