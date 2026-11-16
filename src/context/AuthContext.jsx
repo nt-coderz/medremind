@@ -17,16 +17,11 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     // Remove the legacy global admin cache; admin user data is fetched only into memory.
     localStorage.removeItem('medremind_registered_users');
+    localStorage.removeItem('medremind_system_activity');
   }, []);
 
   // System audit log for Admin overview (initializes empty)
-  const [systemActivity, setSystemActivity] = useState(() => {
-    const saved = localStorage.getItem('medremind_system_activity');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
-    }
-    return [];
-  });
+  const [systemActivity, setSystemActivity] = useState([]);
 
   // Sync to localStorage
   useEffect(() => {
@@ -36,14 +31,6 @@ export function AuthProvider({ children }) {
       localStorage.removeItem('medremind_auth_user');
     }
   }, [currentUser]);
-
-  useEffect(() => {
-    localStorage.setItem('medremind_registered_users', JSON.stringify(registeredUsers));
-  }, [registeredUsers]);
-
-  useEffect(() => {
-    localStorage.setItem('medremind_system_activity', JSON.stringify(systemActivity));
-  }, [systemActivity]);
 
   // Log system activity
   const logActivity = (type, user, details, userId = '') => {
@@ -91,6 +78,7 @@ export function AuthProvider({ children }) {
       localStorage.setItem('medremind_auth_user', JSON.stringify(safeUser));
       setCurrentUser(safeUser);
       setRegisteredUsers([]);
+      setSystemActivity([]);
       logActivity('LOGIN', `${safeUser.name} (${safeUser.role})`, 'User authenticated by MedRemind API', safeUser.id);
       return { success: true, user: safeUser, token: data.token };
     } catch (error) {
@@ -147,6 +135,7 @@ export function AuthProvider({ children }) {
       localStorage.setItem('medremind_auth_user', JSON.stringify(safeUser));
       setCurrentUser(safeUser);
       setRegisteredUsers([]);
+      setSystemActivity([]);
       logActivity('REGISTRATION', `${safeUser.name} (${safeUser.role})`, `Account created with ID ${safeUser.id}`, safeUser.id);
       return { success: true, user: safeUser, token: data.token };
     } catch {
@@ -173,6 +162,7 @@ export function AuthProvider({ children }) {
     }
     setCurrentUser(null);
     setRegisteredUsers([]);
+    setSystemActivity([]);
     localStorage.removeItem('medremind_auth_user');
     localStorage.removeItem('medremind_auth_token');
     window.dispatchEvent(new Event('medremind:session-invalidated'));
@@ -340,9 +330,6 @@ export function AuthProvider({ children }) {
       };
       try {
         localStorage.setItem('medremind_auth_user', JSON.stringify(updated));
-        const allUsers = JSON.parse(localStorage.getItem('medremind_registered_users') || '[]');
-        const updatedAll = allUsers.map(u => u.id === updated.id ? { ...u, ...updated } : u);
-        localStorage.setItem('medremind_registered_users', JSON.stringify(updatedAll));
       } catch (e) {}
       return updated;
     });
