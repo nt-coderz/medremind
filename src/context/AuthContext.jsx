@@ -90,6 +90,7 @@ export function AuthProvider({ children }) {
       localStorage.setItem('medremind_auth_token', data.token);
       localStorage.setItem('medremind_auth_user', JSON.stringify(safeUser));
       setCurrentUser(safeUser);
+      setRegisteredUsers([]);
       logActivity('LOGIN', `${safeUser.name} (${safeUser.role})`, 'User authenticated by MedRemind API', safeUser.id);
       return { success: true, user: safeUser, token: data.token };
     } catch (error) {
@@ -145,6 +146,7 @@ export function AuthProvider({ children }) {
       localStorage.setItem('medremind_auth_token', data.token);
       localStorage.setItem('medremind_auth_user', JSON.stringify(safeUser));
       setCurrentUser(safeUser);
+      setRegisteredUsers([]);
       logActivity('REGISTRATION', `${safeUser.name} (${safeUser.role})`, `Account created with ID ${safeUser.id}`, safeUser.id);
       return { success: true, user: safeUser, token: data.token };
     } catch {
@@ -290,6 +292,7 @@ export function AuthProvider({ children }) {
         localStorage.setItem('medremind_auth_user', JSON.stringify(safeUser));
       } else if (res.status === 401 || res.status === 403) {
         setCurrentUser(null);
+        setRegisteredUsers([]);
         localStorage.removeItem('medremind_auth_token');
         localStorage.removeItem('medremind_auth_user');
         window.dispatchEvent(new Event('medremind:session-invalidated'));
@@ -297,6 +300,7 @@ export function AuthProvider({ children }) {
     } catch {
       // Keep the user signed out if the server cannot validate the session.
       setCurrentUser(null);
+      setRegisteredUsers([]);
     }
   }, []);
 
