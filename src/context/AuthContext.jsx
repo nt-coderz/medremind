@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { format } from 'date-fns';
 import { apiFetch, isOnline } from '../config/apiConfig';
 
@@ -277,7 +277,7 @@ export function AuthProvider({ children }) {
   };
 
   // Restore a session only when the API validates the stored token.
-  const refreshUser = async () => {
+  const refreshUser = useCallback(async () => {
     const token = localStorage.getItem('medremind_auth_token');
     if (!token) {
       setCurrentUser(null);
@@ -309,11 +309,11 @@ export function AuthProvider({ children }) {
       // Keep the user signed out if the server cannot validate the session.
       setCurrentUser(null);
     }
-  };
+  }, []);
 
   useEffect(() => {
     refreshUser();
-  }, []);
+  }, [refreshUser]);
 
   // User medical profile update (offline-first persistent)
   const updateUserMedicalInfo = (allergies, medicalInfo) => {
