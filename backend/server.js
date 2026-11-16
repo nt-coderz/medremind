@@ -1495,6 +1495,9 @@ app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
     if (!files || !Array.isArray(files) || files.length === 0) {
       return res.status(400).json({ error: 'No files provided for batch prescription scan' });
     }
+    if (files.length > 5) {
+      return res.status(413).json({ success: false, error: 'A batch can contain at most 5 prescription documents.' });
+    }
 
     // 1. Retrieve registered patient identity from authenticated database
     const registeredUser = await getRegisteredUser(patientId);
@@ -1535,11 +1538,17 @@ app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
 
       let fileBuffer = null;
       const matches = fileItem.dataBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-      const b64 = matches && matches.length === 3 ? matches[2] : fileItem.dataBase64;
+      const b64 = (matches && matches.length === 3 ? matches[2] : fileItem.dataBase64).replace(/\\s/g, '');
+      const maxFileBytes = 7 * 1024 * 1024;
+      const maxBase64Chars = Math.ceil(maxFileBytes * 4 / 3) + 4;
+      if (b64.length > maxBase64Chars ||
+          !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(b64)) {
+        return res.status(413).json({ success: false, error: `File "${fileName}" is too large or has invalid base64 encoding.` });
+      }
       fileBuffer = Buffer.from(b64, 'base64');
 
-      if (fileBuffer.length === 0) {
-        return res.status(400).json({ error: `File "${fileName}" appears empty or corrupted.` });
+      if (fileBuffer.length === 0 || fileBuffer.length > maxFileBytes) {
+        return res.status(413).json({ success: false, error: `File "${fileName}" is empty or exceeds the 7 MB limit.` });
       }
 
       const isPdf = fileExt === 'pdf';
@@ -1574,7 +1583,14 @@ app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
         // --- PDF Multi-Page Pipeline ---
         console.log(`[Batch Scan] Processing PDF document: ${fileName}...`);
         const pageCount = getPdfPageCount(savedFilePath);
+        if (!Number.isInteger(pageCount) || pageCount < 1 || pageCount > 20) {
+          fs.unlinkSync(savedFilePath);
+          return res.status(413).json({ success: false, error: `PDF "${fileName}" must contain between 1 and 20 pages.` });
+        }
         const extractedPages = extractPdfPagesToImages(savedFilePath, patientUploadDir, `pdf-${docId}`);
+        if (!Array.isArray(extractedPages) || extractedPages.length !== pageCount) {
+          throw new Error(`PDF page extraction failed or returned an unexpected page count for "${fileName}".`);
+        }
         extractedPages.forEach(page => { page.imageUrl = createPrivateMediaUrl(patientId, page.imagePath); });
         const digitalText = extractPdfDigitalText(savedFilePath);
 
