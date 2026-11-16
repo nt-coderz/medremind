@@ -226,6 +226,7 @@ test('PostgreSQL user lookups do not fall back to stale local account records', 
     assert.equal(await db.findUserById(staleUser.id), null);
     assert.equal(await db.findUserByEmailOrId(staleUser.email), null);
     assert.equal(await db.updateUserStatus(staleUser.id, 'Suspended'), null);
+    assert.equal(await db.updateMedicalInfo(staleUser.id, { allergies: [], medicalInfo: {} }), null);
 
     const previousNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
