@@ -32,18 +32,19 @@ function normalizeBackendUrl(value) {
 }
 
 export function getBackendBaseUrl() {
-  // Runtime overrides must use HTTPS; plain HTTP is limited to local development.
+  // Production API endpoints are build-time trusted configuration only.
+  // Do not let localStorage redirect bearer tokens to an arbitrary HTTPS host.
+  if (import.meta.env.PROD) {
+    return normalizeBackendUrl(import.meta.env.VITE_API_URL) || DEFAULT_PRODUCTION_URL;
+  }
+
   const customOverride = normalizeBackendUrl(localStorage.getItem('medremind_backend_url'));
   if (customOverride) return customOverride;
 
-  // Build-time API URL follows the same transport restrictions.
   const configuredUrl = normalizeBackendUrl(import.meta.env.VITE_API_URL);
   if (configuredUrl) return configuredUrl;
 
-  if (Capacitor.isNativePlatform() || import.meta.env.PROD) {
-    return DEFAULT_PRODUCTION_URL;
-  }
-
+  if (Capacitor.isNativePlatform()) return DEFAULT_PRODUCTION_URL;
   return LOCAL_DEV_URL;
 }
 
