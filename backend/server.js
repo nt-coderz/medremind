@@ -143,6 +143,36 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requirePatientAccess(req, res, next) {
+  if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
+  if (req.user.role === 'admin') return next();
+  const requestedIds = [
+    req.params.patientId,
+    req.params.userId,
+    req.params.id,
+    req.query.patientId,
+    req.body?.patientId,
+    req.body?.patient_id,
+    req.body?.userId,
+    req.body?.user_id
+  ].filter(value => value !== undefined && value !== null && value !== '');
+  if (requestedIds.some(id => String(id) !== String(req.user.id))) {
+    return res.status(403).json({ success: false, error: 'Access to another patient account is denied' });
+  }
+  next();
+}
+
+function requireSchedulerSecret(req, res, next) {
+  const configuredSecret = process.env.CRON_SECRET;
+  const suppliedSecret = req.headers['x-cron-secret'];
+  if (!configuredSecret || !suppliedSecret ||
+      Buffer.byteLength(configuredSecret) !== Buffer.byteLength(suppliedSecret) ||
+      !crypto.timingSafeEqual(Buffer.from(configuredSecret), Buffer.from(suppliedSecret))) {
+    return res.status(401).json({ success: false, error: 'Scheduler authentication required' });
+  }
+  next();
+}
+
 // Directories
 const uploadsDir = path.join(__dirname, 'uploads');
 const dataDir = path.join(__dirname, 'data');
@@ -609,7 +639,7 @@ app.get('/api/auth/me', async (req, res) => {
  * GET /api/profile/medical
  * Retrieves patient allergies and medical health profile
  */
-app.get('/api/profile/medical', async (req, res) => {
+app.get('/api/profile/medical', requirePatientAccess, async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, error: 'Authentication required' });
   }
@@ -628,7 +658,7 @@ app.get('/api/profile/medical', async (req, res) => {
  * PUT /api/profile/medical
  * Updates patient allergies and medical health profile (sanitized & length-capped)
  */
-app.put('/api/profile/medical', async (req, res) => {
+app.put('/api/profile/medical', requirePatientAccess, async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, error: 'Authentication required' });
   }
@@ -848,7 +878,7 @@ setInterval(async () => {
  * GET /api/medications
  * Returns medications for a specific patient
  */
-app.get('/api/medications', async (req, res) => {
+app.get('/api/medications', requirePatientAccess, async (req, res) => {
   const patientId = req.query.patientId || req.user?.id;
   const medications = await db.getMedications(patientId);
   res.json({ success: true, medications });
@@ -858,7 +888,7 @@ app.get('/api/medications', async (req, res) => {
  * POST /api/medications
  * Adds or saves a medication
  */
-app.post('/api/medications', async (req, res) => {
+app.post('/api/medications', requirePatientAccess, async (req, res) => {
   try {
     const med = await db.saveMedication(req.body);
     await db.logAudit('MEDICATION_CREATED', req.body.patientId || req.user?.id, { medicationId: med.id, name: med.name });
@@ -872,7 +902,7 @@ app.post('/api/medications', async (req, res) => {
  * PUT /api/medications/:id
  * Updates an existing medication
  */
-app.put('/api/medications/:id', async (req, res) => {
+app.put('/api/medications/:id', requirePatientAccess, async (req, res) => {
   const updated = await db.updateMedication(req.params.id, req.body);
   if (!updated) return res.status(404).json({ success: false, error: 'Medication not found' });
   res.json({ success: true, medication: updated });
@@ -882,7 +912,7 @@ app.put('/api/medications/:id', async (req, res) => {
  * GET /api/food-logs
  * Retrieves food logs for a patient on a specific date (defaults to today)
  */
-app.get('/api/food-logs', async (req, res) => {
+app.get('/api/food-logs', requirePatientAccess, async (req, res) => {
   try {
     const patientId = req.query.patientId || req.user?.id || 'USR-patient';
     const date = req.query.date || new Date().toISOString().split('T')[0];
@@ -897,7 +927,7 @@ app.get('/api/food-logs', async (req, res) => {
  * POST /api/food-logs
  * Adds a new food log entry
  */
-app.post('/api/food-logs', async (req, res) => {
+app.post('/api/food-logs', requirePatientAccess, async (req, res) => {
   try {
     const patientId = req.body.patient_id || req.body.patientId || req.user?.id || 'USR-patient';
     const log = await db.saveFoodLog({ ...req.body, patient_id: patientId });
@@ -912,7 +942,7 @@ app.post('/api/food-logs', async (req, res) => {
  * DELETE /api/food-logs/:id
  * Removes a food log entry
  */
-app.delete('/api/food-logs/:id', async (req, res) => {
+app.delete('/api/food-logs/:id', requirePatientAccess, async (req, res) => {
   try {
     const patientId = req.query.patientId || req.user?.id || 'USR-patient';
     const success = await db.deleteFoodLog(req.params.id, patientId);
@@ -968,7 +998,7 @@ app.get('/api/food-lookup', async (req, res) => {
  * GET /api/nutrition-targets
  * Gets patient's nutritional targets
  */
-app.get('/api/nutrition-targets', async (req, res) => {
+app.get('/api/nutrition-targets', requirePatientAccess, async (req, res) => {
   try {
     const patientId = req.query.patientId || req.user?.id || 'USR-patient';
     const targets = await db.getNutritionTargets(patientId);
@@ -982,7 +1012,7 @@ app.get('/api/nutrition-targets', async (req, res) => {
  * PUT /api/nutrition-targets
  * Updates patient's nutritional targets
  */
-app.put('/api/nutrition-targets', async (req, res) => {
+app.put('/api/nutrition-targets', requirePatientAccess, async (req, res) => {
   try {
     const patientId = req.body.patientId || req.user?.id || 'USR-patient';
     const targets = req.body.targets || req.body;
@@ -997,7 +1027,7 @@ app.put('/api/nutrition-targets', async (req, res) => {
  * DELETE /api/medications/:id
  * Deletes a medication and associated dose schedules
  */
-app.delete('/api/medications/:id', async (req, res) => {
+app.delete('/api/medications/:id', requirePatientAccess, async (req, res) => {
   const success = await db.deleteMedication(req.params.id);
   if (!success) return res.status(404).json({ success: false, error: 'Medication not found' });
   res.json({ success: true, message: 'Medication deleted' });
@@ -1007,7 +1037,7 @@ app.delete('/api/medications/:id', async (req, res) => {
  * GET /api/schedules
  * Returns active dose schedules for a patient
  */
-app.get('/api/schedules', async (req, res) => {
+app.get('/api/schedules', requirePatientAccess, async (req, res) => {
   const patientId = req.query.patientId || req.user?.id;
   const schedules = await db.getSchedules(patientId);
   res.json({ success: true, schedules });
@@ -1017,7 +1047,7 @@ app.get('/api/schedules', async (req, res) => {
  * POST /api/schedules
  * Creates or updates a dose schedule
  */
-app.post('/api/schedules', async (req, res) => {
+app.post('/api/schedules', requirePatientAccess, async (req, res) => {
   const sch = await db.saveSchedule(req.body);
   res.status(201).json({ success: true, schedule: sch });
 });
@@ -1026,7 +1056,7 @@ app.post('/api/schedules', async (req, res) => {
  * GET /api/dose-logs
  * Retrieves adherence logs for a patient
  */
-app.get('/api/dose-logs', (req, res) => {
+app.get('/api/dose-logs', requirePatientAccess, (req, res) => {
   const patientId = req.query.patientId || req.user?.id;
   const date = req.query.date;
   const logs = db.getDoseLogs(patientId, date);
@@ -1037,7 +1067,7 @@ app.get('/api/dose-logs', (req, res) => {
  * POST /api/dose-logs
  * Records a dose taken or skipped
  */
-app.post('/api/dose-logs', async (req, res) => {
+app.post('/api/dose-logs', requirePatientAccess, async (req, res) => {
   try {
     const log = await db.recordDoseLog({
       ...req.body,
@@ -1057,7 +1087,7 @@ app.post('/api/dose-logs', async (req, res) => {
  * GET /api/consents/:userId
  * Retrieves active statutory consent record
  */
-app.get('/api/consents/:userId', async (req, res) => {
+app.get('/api/consents/:userId', requirePatientAccess, async (req, res) => {
   const consent = await db.getConsent(req.params.userId);
   res.json({ success: true, consent });
 });
@@ -1066,7 +1096,7 @@ app.get('/api/consents/:userId', async (req, res) => {
  * POST /api/consents
  * Records statutory consent for DPDP Act, 2023
  */
-app.post('/api/consents', async (req, res) => {
+app.post('/api/consents', requirePatientAccess, async (req, res) => {
   try {
     const consent = await db.saveConsent(req.body);
     await db.logAudit('STATUTORY_CONSENT_RECORDED', req.body.userId, {
@@ -1083,7 +1113,7 @@ app.post('/api/consents', async (req, res) => {
  * POST /api/consents/revoke
  * Revokes statutory consent
  */
-app.post('/api/consents/revoke', async (req, res) => {
+app.post('/api/consents/revoke', requirePatientAccess, async (req, res) => {
   const { userId, reason } = req.body;
   if (!userId) return res.status(400).json({ error: 'User ID required' });
   const success = await db.revokeConsent(userId, reason);
@@ -1186,7 +1216,7 @@ function parseStripOcrBackend(rawText) {
  * Analyzes medicine strips, blister packs, and boxes.
  * Supports online (Gemini primary) and offline (Tesseract fallback).
  */
-app.post('/api/scan-strip', upload.single('stripImage'), async (req, res) => {
+app.post('/api/scan-strip', requireAuth, upload.single('stripImage'), async (req, res) => {
   try {
     let fileBuffer = null;
     let filePath = null;
@@ -1384,7 +1414,7 @@ Keep your tone friendly, warm, empathetic, and concise. Format responses with cl
  * Supports Online (Gemini primary) and Offline (Tesseract) scanning modes.
  * Intelligent Brand vs Generic resolution & duplicate prevention.
  */
-app.post('/api/scan-prescriptions', async (req, res) => {
+app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
   try {
     const { files, patientId, mode = 'online' } = req.body;
     if (!files || !Array.isArray(files) || files.length === 0) {
@@ -1811,7 +1841,7 @@ app.post('/api/scan-prescriptions', async (req, res) => {
  * POST /api/approve-prescriptions (BATCH MULTI-DOCUMENT APPROVAL & DUPLICATE PREVENTION)
  * Prevents creating redundant duplicate active medications when brand and generic match.
  */
-app.post('/api/approve-prescriptions', async (req, res) => {
+app.post('/api/approve-prescriptions', requirePatientAccess, async (req, res) => {
   const { batchId, patientId, documents } = req.body;
   if (!Array.isArray(documents) || documents.length === 0) {
     return res.status(400).json({ error: 'No documents provided for approval' });
@@ -1964,7 +1994,7 @@ app.post('/api/approve-prescriptions', async (req, res) => {
 /**
  * Backward compatibility: POST /api/scan-medicine
  */
-app.post('/api/scan-medicine', upload.single('prescriptionImage'), async (req, res) => {
+app.post('/api/scan-medicine', requireAuth, upload.single('prescriptionImage'), async (req, res) => {
   try {
     let filePath = null;
     let fileBuffer = null;
@@ -2065,7 +2095,7 @@ app.post('/api/scan-medicine', upload.single('prescriptionImage'), async (req, r
 /**
  * Backward compatibility: POST /api/approve-prescription
  */
-app.post('/api/approve-prescription', async (req, res) => {
+app.post('/api/approve-prescription', requirePatientAccess, async (req, res) => {
   const { prescriptionId, patientId, approvedMedicines } = req.body;
   if (!prescriptionId || !Array.isArray(approvedMedicines) || approvedMedicines.length === 0) {
     return res.status(400).json({ error: 'Invalid prescription approval request' });
@@ -2240,7 +2270,7 @@ app.get('/api/lookup-medicine', (req, res) => {
 /**
  * POST /api/tick
  */
-app.post('/api/tick', (req, res) => {
+app.post('/api/tick', requireSchedulerSecret, (req, res) => {
   const schedules = getStore('schedules.json', []);
   const notifications = getStore('notifications.json', []);
   const now = new Date();
