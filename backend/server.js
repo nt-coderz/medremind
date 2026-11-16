@@ -923,7 +923,7 @@ app.post('/api/admin/users/:userId/cancel-deletion', requireAdmin, async (req, r
 });
 
 // Periodic background worker: executes expired scheduled deletions (24-hour grace window)
-setInterval(async () => {
+const accountDeletionWorker = setInterval(async () => {
   try {
     const deleted = await db.executeScheduledDeletions();
     if (deleted && deleted.length > 0) {
@@ -933,6 +933,8 @@ setInterval(async () => {
     console.error('[Account Deletion Worker] Error during scheduled deletion run:', err.message);
   }
 }, 60000);
+// Do not keep test processes or one-off scripts alive solely for this background worker.
+accountDeletionWorker.unref();
 
 // -------------------------------------------------------------
 // Medication & Routine Management Endpoints
