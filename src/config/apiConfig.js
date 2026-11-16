@@ -17,24 +17,33 @@ export const LOCAL_DEV_URL = 'http://localhost:3001';
 /**
  * Returns the active Backend Origin URL (without trailing slash)
  */
+function normalizeBackendUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = new URL(value.trim());
+    const isLocalHost = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+    const secure = parsed.protocol === 'https:';
+    const allowedDevelopmentHttp = !import.meta.env.PROD && parsed.protocol === 'http:' && isLocalHost;
+    if (!secure && !allowedDevelopmentHttp) return null;
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
 export function getBackendBaseUrl() {
-  // 1. Explicit user/admin runtime override from localStorage
-  const customOverride = localStorage.getItem('medremind_backend_url');
-  if (customOverride && customOverride.trim() !== '') {
-    return customOverride.trim().replace(/\/+$/, '');
-  }
+  // Runtime overrides must use HTTPS; plain HTTP is limited to local development.
+  const customOverride = normalizeBackendUrl(localStorage.getItem('medremind_backend_url'));
+  if (customOverride) return customOverride;
 
-  // 2. Vite environment variable if injected at build time
-  if (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL.trim() !== '') {
-    return import.meta.env.VITE_API_URL.trim().replace(/\/+$/, '');
-  }
+  // Build-time API URL follows the same transport restrictions.
+  const configuredUrl = normalizeBackendUrl(import.meta.env.VITE_API_URL);
+  if (configuredUrl) return configuredUrl;
 
-  // 3. Native device or production web builds default to production cloud endpoint
   if (Capacitor.isNativePlatform() || import.meta.env.PROD) {
     return DEFAULT_PRODUCTION_URL;
   }
 
-  // 4. Local web development fallback
   return LOCAL_DEV_URL;
 }
 
