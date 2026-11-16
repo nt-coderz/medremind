@@ -206,3 +206,6 @@ The following changes have since been committed to `security/medremind-audit-202
 - Scan responses now return short-lived signed media URLs; the media route verifies the signature and expiry, validates the filename, and serves only from the matching patient directory with private/no-store cache headers.
 - Added backend regression coverage for signed preview access, tampered/expired-token rejection, cross-patient directory isolation, and denial of the old public `/uploads/*` path.
 - Existing files left in the old shared uploads root are no longer publicly reachable. They need a controlled owner-verified migration if historical prescription previews must be retained.
+
+
+- Multipart scan uploads are now limited to one JPG/PNG/WEBP image of at most 15 MB; unsupported MIME types are rejected before OCR processing.
