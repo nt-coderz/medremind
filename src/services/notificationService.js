@@ -66,7 +66,7 @@ export async function initNotificationChannels() {
         importance: 5, // IMPORTANCE_HIGH (Heads-up alert, bypasses basic silence)
         sound: 'alarm_chime.wav',
         vibration: true,
-        visibility: 1, // VISIBILITY_PUBLIC (Visible on locked phone screen)
+        visibility: 0, // VISIBILITY_PRIVATE (hide medication details on the lock screen)
         lights: true,
         lightColor: '#238B78'
       });
@@ -87,7 +87,7 @@ export async function initNotificationChannels() {
 
       // Register listener for action button interactions
       await LocalNotifications.addListener('localNotificationActionPerformed', async (action) => {
-        console.log('[Notification Action Received]', action.actionId, action.notification?.extra);
+        console.log('[Notification Action Received]', action.actionId);
         try {
           await notificationActionHandler?.(action);
         } catch (error) {
@@ -274,7 +274,7 @@ export async function snoozeNotification(medicine, timeSlot, minutes = 10) {
           }
         ]
       });
-      console.log(`[Alarm Service] Snoozed reminder for ${medicine.name} to ${snoozeDate.toLocaleTimeString()}`);
+      console.log(`[Alarm Service] Snoozed medication reminder to ${snoozeDate.toLocaleTimeString()}`);
     } catch (e) {
       console.error('Error scheduling snooze notification:', e);
     }
