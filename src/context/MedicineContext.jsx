@@ -10,91 +10,111 @@ import {
   setNotificationActionHandler
 } from '../services/notificationService';
 import { toast } from 'sonner';
+import { useAuth } from './AuthContext';
 
 const MedicineContext = createContext(null);
 
 export function MedicineProvider({ children }) {
   const todayKey = format(new Date(), 'yyyy-MM-dd');
+  const { currentUser } = useAuth();
+  const storageScope = currentUser?.id || null;
+  const [loadedStorageScope, setLoadedStorageScope] = useState(null);
 
-  // Medicines state: Real user records, starting clean without fabricated demo data
-  const [medicines, setMedicines] = useState(() => {
-    const saved = localStorage.getItem('medremind_medicines');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          // Filter out synthetic legacy demo items if present
-          const clean = parsed.filter(m => m.userId !== 'USR-e87f3b14-9a2c-4d5e-88f1-209471ab5e82' || !['med-1', 'med-2', 'med-3', 'med-4'].includes(m.id));
-          return clean;
-        }
-      } catch (e) { /* ignore */ }
+  const [medicines, setMedicines] = useState([]);
+  const [doseLogs, setDoseLogs] = useState({});
+  const [patientProfile, setPatientProfile] = useState({
+    bloodType: 'Not specified',
+    allergies: [],
+    emergencyContact: null,
+    settings: {
+      soundEnabled: true,
+      doseReminders: true,
+      quietHoursStart: '23:00',
+      quietHoursEnd: '07:00'
     }
-    return [];
   });
+  const [notifications, setNotifications] = useState([]);
 
-  // Dose tracking logs: { [date]: { [`${medId}_${timeSlot}`]: { status: 'taken'|'skipped', timestamp: string } } }
-  const [doseLogs, setDoseLogs] = useState(() => {
-    const saved = localStorage.getItem('medremind_dose_logs');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
-    }
-    return {};
-  });
-
-  // Profile state: initialized clean without hardcoded placeholder identities
-  const [patientProfile, setPatientProfile] = useState(() => {
-    const saved = localStorage.getItem('medremind_patient_profile');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed && parsed.name && parsed.name !== 'Alex Morgan') {
-          return parsed;
+  // Load each patient's local health data from a separate namespace.
+  // Legacy global keys are deliberately not migrated because they have no
+  // trustworthy owner and could expose one account's data to another.
+  useEffect(() => {
+    setLoadedStorageScope(null);
+    if (!storageScope) {
+      setMedicines([]);
+      setDoseLogs({});
+      setPatientProfile({
+        bloodType: 'Not specified',
+        allergies: [],
+        emergencyContact: null,
+        settings: {
+          soundEnabled: true,
+          doseReminders: true,
+          quietHoursStart: '23:00',
+          quietHoursEnd: '07:00'
         }
-      } catch (e) { /* ignore */ }
+      });
+      setNotifications([]);
+      setLoadedStorageScope(null);
+      return;
     }
-    return {
-      bloodType: "Not specified",
-      allergies: [],
-      emergencyContact: null,
-      settings: {
-        soundEnabled: true,
-        doseReminders: true,
-        quietHoursStart: "23:00",
-        quietHoursEnd: "07:00"
+
+    const readScoped = (key, fallback) => {
+      try {
+        const value = localStorage.getItem(`${key}:${storageScope}`);
+        return value ? JSON.parse(value) : fallback;
+      } catch {
+        return fallback;
       }
     };
-  });
 
-  // Notifications / Alerts state: Real system & medication alerts, starting clean
-  const [notifications, setNotifications] = useState(() => {
-    const saved = localStorage.getItem('medremind_notifications');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter(n => !['notif-1', 'notif-2'].includes(n.id));
-        }
-      } catch (e) { /* ignore */ }
-    }
-    return [];
-  });
+    const savedMedicines = readScoped('medremind_medicines', []);
+    setMedicines(Array.isArray(savedMedicines)
+      ? savedMedicines.filter(m => m.userId !== 'USR-e87f3b14-9a2c-4d5e-88f1-209471ab5e82' || !['med-1', 'med-2', 'med-3', 'med-4'].includes(m.id))
+      : []);
+    const savedDoseLogs = readScoped('medremind_dose_logs', {});
+    setDoseLogs(savedDoseLogs && typeof savedDoseLogs === 'object' ? savedDoseLogs : {});
+    const savedProfile = readScoped('medremind_patient_profile', null);
+    setPatientProfile(savedProfile && savedProfile.name !== 'Alex Morgan'
+      ? savedProfile
+      : {
+          bloodType: 'Not specified',
+          allergies: [],
+          emergencyContact: null,
+          settings: {
+            soundEnabled: true,
+            doseReminders: true,
+            quietHoursStart: '23:00',
+            quietHoursEnd: '07:00'
+          }
+        });
+    const savedNotifications = readScoped('medremind_notifications', []);
+    setNotifications(Array.isArray(savedNotifications)
+      ? savedNotifications.filter(n => !['notif-1', 'notif-2'].includes(n.id))
+      : []);
+    setLoadedStorageScope(storageScope);
+  }, [storageScope]);
 
-  // Persist state updates
+  // Persist only after the current account's namespace has finished loading.
   useEffect(() => {
-    localStorage.setItem('medremind_medicines', JSON.stringify(medicines));
-  }, [medicines]);
+    if (!storageScope || loadedStorageScope !== storageScope) return;
+    localStorage.setItem(`medremind_medicines:${storageScope}`, JSON.stringify(medicines));
+  }, [medicines, storageScope, loadedStorageScope]);
 
   useEffect(() => {
-    localStorage.setItem('medremind_dose_logs', JSON.stringify(doseLogs));
-  }, [doseLogs]);
+    if (!storageScope || loadedStorageScope !== storageScope) return;
+    localStorage.setItem(`medremind_dose_logs:${storageScope}`, JSON.stringify(doseLogs));
+  }, [doseLogs, storageScope, loadedStorageScope]);
 
   useEffect(() => {
-    localStorage.setItem('medremind_patient_profile', JSON.stringify(patientProfile));
-  }, [patientProfile]);
+    if (!storageScope || loadedStorageScope !== storageScope) return;
+    localStorage.setItem(`medremind_patient_profile:${storageScope}`, JSON.stringify(patientProfile));
+  }, [patientProfile, storageScope, loadedStorageScope]);
 
   useEffect(() => {
-    localStorage.setItem('medremind_notifications', JSON.stringify(notifications));
-  }, [notifications]);
+    if (!storageScope || loadedStorageScope !== storageScope) return;
+    localStorage.setItem(`medremind_notifications:${storageScope}`, JSON.stringify(notifications));
+  }, [notifications, storageScope, loadedStorageScope]);
 
   // Dose Tracking Actions with Future Dose Safeguard
   const recordDose = (medId, timeSlot, status, scheduledTime = null) => {
@@ -193,7 +213,9 @@ export function MedicineProvider({ children }) {
     setPatientProfile(prev => {
       const updated = { ...prev, ...updates };
       try {
-        localStorage.setItem('medremind_patient_profile', JSON.stringify(updated));
+        if (storageScope && loadedStorageScope === storageScope) {
+          localStorage.setItem(`medremind_patient_profile:${storageScope}`, JSON.stringify(updated));
+        }
       } catch (e) {
         console.warn('LocalStorage save failed:', e);
       }
@@ -384,7 +406,7 @@ export function MedicineProvider({ children }) {
     });
 
     return () => setNotificationActionHandler(null);
-  }, [medicines, todayKey]);
+  }, [medicines, todayKey, storageScope, loadedStorageScope]);
 
   // Rebuild a rolling queue on app launch and whenever the app returns to foreground.
   useEffect(() => {
@@ -393,7 +415,7 @@ export function MedicineProvider({ children }) {
     let appStateListener = null;
 
     const refreshAlarmQueue = async () => {
-      if (disposed || refreshing || !Capacitor.isNativePlatform()) return;
+      if (disposed || refreshing || !Capacitor.isNativePlatform() || !storageScope || loadedStorageScope !== storageScope) return;
       refreshing = true;
       try {
         for (const med of medicines) {
@@ -427,7 +449,7 @@ export function MedicineProvider({ children }) {
       disposed = true;
       appStateListener?.remove();
     };
-  }, [medicines]);
+  }, [medicines, storageScope, loadedStorageScope]);
 
   // Metrics computation for dashboard
   const getTodayMetrics = () => {
