@@ -2311,8 +2311,25 @@ app.post('/api/tick', requireSchedulerSecret, (req, res) => {
 
 let serverInstance = null;
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  serverInstance = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MedRemind Backend listening on http://0.0.0.0:${PORT}`);
+  const startServer = async () => {
+    if (process.env.NODE_ENV === 'production') {
+      if (!process.env.DATABASE_URL || !db.isPostgres) {
+        throw new Error('Production startup blocked: a configured PostgreSQL DATABASE_URL is required.');
+      }
+      const health = await db.checkHealth();
+      if (health.status !== 'connected' || health.type !== 'Supabase PostgreSQL') {
+        throw new Error(`Production startup blocked: PostgreSQL health check failed (${health.error || health.status}).`);
+      }
+    }
+    serverInstance = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`MedRemind Backend listening on http://0.0.0.0:${PORT}`);
+    });
+  };
+
+  startServer().catch(async error => {
+    console.error('[Startup] MedRemind backend refused to start:', error.message);
+    try { await db.pool?.end(); } catch {}
+    process.exit(1);
   });
 }
 
