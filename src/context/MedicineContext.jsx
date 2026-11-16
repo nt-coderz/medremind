@@ -401,22 +401,25 @@ export function MedicineProvider({ children }) {
 
       const timeSlot = extra.timeSlot || med.timeSlots?.[0] || extra.scheduledTime || 'Dose';
       if (action.actionId === 'SNOOZE_10') {
-        await snoozeNotification(med, timeSlot, 10);
+        await snoozeNotification(med, timeSlot, 10, extra.occurrenceDate || todayKey);
         return;
       }
       if (action.actionId !== 'TAKE' && action.actionId !== 'SKIP') return;
 
       const scheduledTime = extra.scheduledTime || timeSlot;
+      const occurrenceDate = /^\\d{4}-\\d{2}-\\d{2}$/.test(extra.occurrenceDate || '')
+        ? extra.occurrenceDate
+        : todayKey;
       const { hours, minutes } = parseArbitraryTime(scheduledTime);
-      const dueAt = new Date();
+      const dueAt = new Date(occurrenceDate + 'T00:00:00');
       dueAt.setHours(hours, minutes, 0, 0);
-      if (dueAt.getTime() - Date.now() > 60000) return;
+      if (Number.isNaN(dueAt.getTime()) || dueAt.getTime() - Date.now() > 60000) return;
 
       const status = action.actionId === 'TAKE' ? 'taken' : 'skipped';
       const timestamp = format(new Date(), 'hh:mm a');
       setDoseLogs(prev => ({
         ...prev,
-        [todayKey]: {
+        [occurrenceDate]: {
           ...(prev[todayKey] || {}),
           [`${med.id}_${timeSlot}`]: { status, timestamp }
         }
