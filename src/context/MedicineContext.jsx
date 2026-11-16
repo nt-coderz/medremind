@@ -447,7 +447,14 @@ export function MedicineProvider({ children }) {
       refreshing = true;
       try {
         if (!storageScope) return;
-        if (loadedStorageScope !== storageScope) return;
+        if (loadedStorageScope !== storageScope) {
+          if (loadedStorageScope) {
+            for (const med of medicines) {
+              await cancelMedicationNotifications(med.id);
+            }
+          }
+          return;
+        }
         for (const med of medicines) {
           await cancelMedicationNotifications(med.id, { includeSnoozes: false });
         }
