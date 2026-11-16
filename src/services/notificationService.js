@@ -46,8 +46,15 @@ export function parseArbitraryTime(timeStr) {
  * Initialize Android High-Importance Notification Channel with Custom Alarm Sound & Vibration
  */
 let channelsInitialized = false;
+let notificationActionHandler = null;
+
+export function setNotificationActionHandler(handler) {
+  notificationActionHandler = typeof handler === 'function' ? handler : null;
+}
+
 export async function initNotificationChannels() {
-  if (channelsInitialized) return;
+  if (channelsInitialized) return true;
+  if (!Capacitor.isNativePlatform()) return true;
 
   if (Capacitor.isNativePlatform()) {
     try {
@@ -71,8 +78,8 @@ export async function initNotificationChannels() {
             id: 'MED_REMINDER_ACTIONS',
             actions: [
               { id: 'TAKE', title: 'Take Now', foreground: true },
-              { id: 'SNOOZE_10', title: 'Snooze (10m)', foreground: false },
-              { id: 'SKIP', title: 'Skip Dose', destructive: true, foreground: false }
+              { id: 'SNOOZE_10', title: 'Snooze (10m)', foreground: true },
+              { id: 'SKIP', title: 'Skip Dose', destructive: true, foreground: true }
             ]
           }
         ]
@@ -81,18 +88,22 @@ export async function initNotificationChannels() {
       // Register listener for action button interactions
       await LocalNotifications.addListener('localNotificationActionPerformed', async (action) => {
         console.log('[Notification Action Received]', action.actionId, action.notification?.extra);
-        const extra = action.notification?.extra || {};
-        if (action.actionId === 'SNOOZE_10' && extra.medicine) {
-          await snoozeNotification(extra.medicine, extra.timeSlot || 'Dose', 10);
+        try {
+          await notificationActionHandler?.(action);
+        } catch (error) {
+          console.error('[Notifications] Action handler failed:', error);
         }
       });
 
       channelsInitialized = true;
       console.log('[Notifications] medremind_alarms channel and actions initialized successfully.');
+      return true;
     } catch (e) {
-      console.warn('[Notifications] Channel initialization notice:', e.message);
+      console.error('[Notifications] Channel initialization failed:', e);
+      return false;
     }
   }
+  return true;
 }
 
 /**
@@ -101,6 +112,8 @@ export async function initNotificationChannels() {
 export async function requestNotificationPermission() {
   if (Capacitor.isNativePlatform()) {
     try {
+      const current = await LocalNotifications.checkPermissions();
+      if (current.display === 'granted') return true;
       const status = await LocalNotifications.requestPermissions();
       return status.display === 'granted';
     } catch (e) {
@@ -115,68 +128,105 @@ export async function requestNotificationPermission() {
 }
 
 /**
- * Schedule a native local notification for a medication dose
- * Guaranteed to ring with sound & vibration even when phone is locked or app is closed
+ * Schedule a rolling 14-day queue of one-shot reminders for a medication time.
+ * One-shot alarms can be exact on Android; repeating alarms are inexact on Android.
+ * The queue is refreshed when the app starts or returns to the foreground.
  */
-export async function scheduleMedicationDoseNotification(medicine, timeStr, scheduleId) {
-  if (!medicine || medicine.status === 'Inactive') {
-    return; // Do not schedule for inactive medicines
-  }
+const SCHEDULE_HORIZON_DAYS = 14;
 
-  await initNotificationChannels();
+export async function getAlarmPermissionStatus() {
+  if (!Capacitor.isNativePlatform()) {
+    return { display: 'unsupported', exactAlarm: 'unsupported' };
+  }
+  try {
+    const permission = await LocalNotifications.checkPermissions();
+    let exactAlarm = 'unsupported';
+    if (Capacitor.getPlatform() === 'android') {
+      const exact = await LocalNotifications.checkExactNotificationSetting();
+      exactAlarm = exact.exact_alarm;
+    }
+    return { display: permission.display, exactAlarm };
+  } catch (error) {
+    console.warn('[Notifications] Could not read alarm permission status:', error);
+    return { display: 'unknown', exactAlarm: 'unknown' };
+  }
+}
+
+export async function openExactAlarmSettings() {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
+    return { exact_alarm: 'unsupported' };
+  }
+  return LocalNotifications.changeExactNotificationSetting();
+}
+
+export async function scheduleMedicationDoseNotification(medicine, timeStr, scheduleId) {
+  if (!medicine || medicine.status === 'Inactive') return { success: false, reason: 'inactive' };
+  if (!Capacitor.isNativePlatform()) return { success: true, native: false };
+
+  const channelReady = await initNotificationChannels();
+  if (!channelReady) return { success: false, reason: 'channel_initialization_failed' };
+
+  const hasPerm = await requestNotificationPermission();
+  if (!hasPerm) return { success: false, reason: 'notification_permission_denied' };
 
   const { hours, minutes } = parseArbitraryTime(timeStr);
   const now = new Date();
-  const scheduledDate = new Date();
-  scheduledDate.setHours(hours, minutes, 0, 0);
+  const matchingSlot = (medicine.timeSlots || []).find(slot => {
+    const parsed = parseArbitraryTime(slot);
+    return parsed.hours === hours && parsed.minutes === minutes;
+  }) || timeStr;
+  const notifications = [];
 
-  // If time has already passed today, schedule for next occurrence (tomorrow)
-  if (scheduledDate.getTime() <= now.getTime()) {
-    scheduledDate.setDate(scheduledDate.getDate() + 1);
+  for (let dayOffset = 0; dayOffset < SCHEDULE_HORIZON_DAYS; dayOffset++) {
+    const scheduledDate = new Date();
+    scheduledDate.setDate(now.getDate() + dayOffset);
+    scheduledDate.setHours(hours, minutes, 0, 0);
+    if (scheduledDate.getTime() <= now.getTime()) continue;
+
+    const dateKey = [
+      scheduledDate.getFullYear(),
+      String(scheduledDate.getMonth() + 1).padStart(2, '0'),
+      String(scheduledDate.getDate()).padStart(2, '0')
+    ].join('-');
+    const notifId = hashCode(`${medicine.id || medicine.name}_${timeStr}_${dateKey}`);
+    notifications.push({
+      id: notifId,
+      title: `Medication Reminder: ${medicine.name}`,
+      body: `Scheduled for ${timeStr} • ${medicine.dosage || '1 dose'}${medicine.instructions ? ` • ${medicine.instructions}` : ''}`,
+      schedule: {
+        at: scheduledDate,
+        allowWhileIdle: true
+      },
+      isExactNotification: true,
+      sound: 'alarm_chime.wav',
+      channelId: 'medremind_alarms',
+      actionTypeId: 'MED_REMINDER_ACTIONS',
+      extra: {
+        medicineId: medicine.id,
+        medicineName: medicine.name,
+        medicine,
+        timeSlot: matchingSlot,
+        scheduledTime: timeStr,
+        scheduleId: scheduleId || notifId,
+        occurrenceDate: dateKey
+      }
+    });
   }
 
-  const notifId = hashCode(`${medicine.id || medicine.name}_${timeStr}`);
+  if (notifications.length === 0) return { success: true, scheduled: 0 };
 
-  if (Capacitor.isNativePlatform()) {
-    try {
-      const hasPerm = await requestNotificationPermission();
-      if (!hasPerm) {
-        console.warn('Notification permission not granted');
-        return;
-      }
-
-      await LocalNotifications.schedule({
-        notifications: [
-          {
-            id: notifId,
-            title: `Medication Reminder: ${medicine.name}`,
-            body: `Scheduled for ${timeStr} • ${medicine.dosage || '1 dose'}${medicine.instructions ? ` • ${medicine.instructions}` : ''}`,
-            schedule: { 
-              at: scheduledDate, 
-              repeats: true, 
-              every: 'day',
-              allowWhileIdle: true 
-            },
-            sound: 'alarm_chime.wav',
-            channelId: 'medremind_alarms',
-            actionTypeId: 'MED_REMINDER_ACTIONS',
-            extra: {
-              medicineId: medicine.id,
-              medicineName: medicine.name,
-              medicine,
-              timeSlot: timeStr,
-              scheduleId: scheduleId || notifId
-            }
-          }
-        ]
-      });
-
-      console.log(`[Alarm Service] Scheduled alarm for ${medicine.name} at ${scheduledDate.toLocaleTimeString()} (ID: ${notifId})`);
-    } catch (err) {
-      console.error('Failed to schedule local notification:', err);
-    }
-  } else {
-    console.log(`[Web Notification Engine] Scheduled ${medicine.name} at ${scheduledDate.toLocaleTimeString()}`);
+  try {
+    const result = await LocalNotifications.schedule({ notifications });
+    const permissionStatus = await getAlarmPermissionStatus();
+    return {
+      success: true,
+      scheduled: notifications.length,
+      exactAlarm: permissionStatus.exactAlarm,
+      warning: result.warning || null
+    };
+  } catch (error) {
+    console.error('[Alarm Service] Failed to schedule medication reminders:', error);
+    return { success: false, reason: error.message || 'schedule_failed' };
   }
 }
 
