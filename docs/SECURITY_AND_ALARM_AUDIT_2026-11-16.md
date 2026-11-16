@@ -244,3 +244,7 @@ The following changes have since been committed to `security/medremind-audit-202
 
 - Regression tests were added for private media, cross-patient medication duplicate updates, PostgreSQL stale-user fallback, scan upload count limits, and scheduler authentication.
 - GitHub Actions runs are still queued/cancelled while new commits supersede old runs. No passing backend/frontend/Android build result has yet been observed. The final APK/ZIP must not be treated as verified until a current-head workflow run completes successfully.
+
+
+- Native notification action listeners now initialize at app mount and buffer actions until the signed-in patient's dose data is hydrated. Each scheduled notification and snooze carries the owning patient ID; actions from a different or unsigned-in account are ignored.
+- Snooze notifications use the current exact-alarm permission state, and Take/Skip actions are written to the original scheduled local date (including after midnight).
