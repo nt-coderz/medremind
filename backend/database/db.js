@@ -34,27 +34,20 @@ export function hashPassword(plainTextPassword) {
 }
 
 export function verifyPassword(plainTextPassword, storedHash) {
-  if (!storedHash) return false;
-  // Fallback for legacy demo accounts:
-  if (plainTextPassword === '123456' && (storedHash === '123456' || storedHash.includes('123456'))) return true;
-  if ((plainTextPassword === 'demo123' || plainTextPassword === 'password123') && (storedHash === 'demo123' || storedHash === 'password123')) return true;
-  
+  if (typeof plainTextPassword !== 'string' || typeof storedHash !== 'string') return false;
   const parts = storedHash.split(':');
   if (parts.length !== 2) return false;
   const [salt, originalHash] = parts;
-  const computedHash = crypto.pbkdf2Sync(plainTextPassword, salt, 100000, 64, 'sha512').toString('hex');
-  if (crypto.timingSafeEqual(Buffer.from(computedHash, 'utf-8'), Buffer.from(originalHash, 'utf-8'))) {
-    return true;
+  // PBKDF2-SHA512 with a 16-byte hex salt and 64-byte hex digest.
+  if (!/^[a-f0-9]{32}$/i.test(salt) || !/^[a-f0-9]{128}$/i.test(originalHash)) return false;
+  try {
+    const computedHash = crypto.pbkdf2Sync(plainTextPassword, salt, 100000, 64, 'sha512');
+    const expectedHash = Buffer.from(originalHash, 'hex');
+    return expectedHash.length === computedHash.length &&
+      crypto.timingSafeEqual(computedHash, expectedHash);
+  } catch {
+    return false;
   }
-  // If user used password123 but account had demo123 (or vice-versa) for initial mock accounts:
-  if (plainTextPassword === 'password123' || plainTextPassword === 'demo123') {
-    const altPassword = plainTextPassword === 'password123' ? 'demo123' : 'password123';
-    const altHash = crypto.pbkdf2Sync(altPassword, salt, 100000, 64, 'sha512').toString('hex');
-    if (crypto.timingSafeEqual(Buffer.from(altHash, 'utf-8'), Buffer.from(originalHash, 'utf-8'))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 // Simple signed token generator
@@ -71,15 +64,20 @@ export function verifyToken(token) {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   const [header, body, signature] = parts;
-  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(`${header}.${body}`).digest('base64url');
-  if (signature !== expectedSig) return null;
   try {
+    const parsedHeader = JSON.parse(Buffer.from(header, 'base64url').toString('utf-8'));
+    if (parsedHeader.alg !== 'HS256' || parsedHeader.typ !== 'JWT') return null;
+    const expectedSig = crypto.createHmac('sha256', AUTH_SECRET)
+      .update(`${header}.${body}`).digest();
+    const suppliedSig = Buffer.from(signature, 'base64url');
+    if (suppliedSig.length !== expectedSig.length ||
+        !crypto.timingSafeEqual(suppliedSig, expectedSig)) return null;
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf-8'));
-    if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) {
-      return null; // Expired
-    }
+    const now = Math.floor(Date.now() / 1000);
+    if (!Number.isInteger(payload.exp) || payload.exp <= now) return null;
+    if (!payload.id || !payload.role) return null;
     return payload;
-  } catch (e) {
+  } catch {
     return null;
   }
 }
