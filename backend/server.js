@@ -475,10 +475,7 @@ app.post('/api/auth/register', async (req, res) => {
     });
 
     await db.logAudit('USER_REGISTRATION', newUser.id, {
-      name: newUser.name,
-      role: newUser.role,
-      email: newUser.email,
-      phone: rawPhone
+      role: newUser.role
     });
 
     return res.status(201).json({
@@ -898,7 +895,7 @@ app.get('/api/medications', requirePatientAccess, async (req, res) => {
 app.post('/api/medications', requirePatientAccess, async (req, res) => {
   try {
     const med = await db.saveMedication({ ...req.body, patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id });
-    await db.logAudit('MEDICATION_CREATED', req.user.id, { patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id, medicationId: med.id, name: med.name });
+    await db.logAudit('MEDICATION_CREATED', req.user.id, { patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id, medicationId: med.id });
     res.status(201).json({ success: true, medication: med });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
@@ -938,7 +935,7 @@ app.post('/api/food-logs', requirePatientAccess, async (req, res) => {
   try {
     const patientId = req.user.role === 'admin' ? (req.body.patient_id || req.body.patientId || req.user.id) : req.user.id;
     const log = await db.saveFoodLog({ ...req.body, patient_id: patientId });
-    await db.logAudit('FOOD_LOG_CREATED', req.user.id, { patientId, logId: log.id, foodName: log.food_name, calories: log.calories });
+    await db.logAudit('FOOD_LOG_CREATED', req.user.id, { patientId, logId: log.id });
     res.status(201).json({ success: true, log });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
@@ -1445,7 +1442,7 @@ app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
       m => m.patientId === registeredUser.id && (m.status === 'Active' || m.status === 'ACTIVE')
     );
 
-    console.log(`[Batch Scan] Mode: ${mode.toUpperCase()} | Processing ${files.length} file(s) for patient ${registeredPatientName} (${registeredUser.id})`);
+    console.log(`[Batch Scan] Mode: ${mode.toUpperCase()} | Processing ${files.length} file(s).`);
 
     const processedDocuments = [];
     const existingPrescriptions = getStore('prescriptions.json', []);
@@ -1876,8 +1873,7 @@ app.post('/api/approve-prescriptions', requirePatientAccess, async (req, res) =>
       logAudit('PATIENT_NAME_MISMATCH_OVERRIDDEN', registeredUser.id, {
         batchId,
         documentId: doc.documentId,
-        registeredPatientName: registeredUser.name,
-        prescriptionPatientName: doc.patientVerification?.extractedName || 'Unknown',
+        patientNameMismatch: true,
         decision: 'PROCEED_ANYWAY',
         userAcknowledgement: 'Patient explicitly acknowledged that the prescription name does not match their account.'
       });
