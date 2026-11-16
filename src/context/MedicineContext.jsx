@@ -446,7 +446,12 @@ export function MedicineProvider({ children }) {
       if (disposed || refreshing || !Capacitor.isNativePlatform()) return;
       refreshing = true;
       try {
-        if (!storageScope) return;
+        if (!storageScope) {
+          if (!localStorage.getItem('medremind_auth_token')) {
+            await cancelAllMedicationNotifications();
+          }
+          return;
+        }
         if (loadedStorageScope !== storageScope) {
           if (loadedStorageScope) {
             for (const med of medicines) {
