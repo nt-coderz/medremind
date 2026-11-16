@@ -163,3 +163,12 @@ The following changes have since been committed to `security/medremind-audit-202
 
 - Nutrition food logs and nutrition targets were also moved to per-patient localStorage namespaces. Nutrition API requests now rely on the authenticated session rather than the legacy `USR-patient` fallback identity.
 - As with the medication store, old unscoped nutrition cache entries are not automatically migrated because their ownership cannot be established safely.
+
+
+### Additional ownership hardening
+
+- Removed remaining `USR-patient` fallback identities from backend patient/nutrition routes and the nutrition UI/service.
+- Nutrition requests now derive ownership from the validated session; food logs and nutrition targets are cached per patient.
+- Database food-log create/update and delete operations now require a patient ID and constrain updates/deletes by both record ID and patient ownership.
+- Food-log ID collisions across different patients are rejected rather than updating another patient's record.
+- Administrator user-directory loading and status changes now use the protected backend endpoints rather than local-only status updates.
