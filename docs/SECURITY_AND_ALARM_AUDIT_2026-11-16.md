@@ -79,3 +79,27 @@ These controls do not neutralize the bypasses described above.
 ## Change policy
 
 This audit branch intentionally contains documentation only. No security behavior has been changed yet, because safely fixing authorization requires reviewing all route consumers and data ownership semantics first. Do not merge this audit document as a substitute for the remediation work.
+
+
+### Critical — additional administrative and medical-data endpoints are unguarded
+Further route-by-route inspection found:
+- `GET /api/users` and `PUT /api/users/:id/status` (around lines 650–665) have no visible admin authorization check.
+- `POST /api/admin/backup` (around lines 1070–1075) has no visible admin authorization check.
+- `GET /api/users/:patientId` (around lines 1078–1081) accepts an arbitrary patient identifier.
+- Consent endpoints accept caller-supplied user IDs (around lines 1035–1066) without a visible identity/ownership check.
+- Prescription scan and approval endpoints accept caller-supplied `patientId` values (around lines 1359–1375 and 1786–1793); approval can write medications against that identity.
+- `POST /api/tick` (around lines 2215 onward) is an operational state-changing endpoint with no visible authentication or scheduler secret check.
+- These findings reinforce the need for route-level authorization, not just token parsing.
+
+### High — database outage can silently degrade persistence/security
+- `backend/database/db.js` describes a PostgreSQL plus durable fallback mode and sets `isPostgres = false` when PostgreSQL setup/connection fails (around lines 88–151).
+- Many database operations fall back to in-memory collections when PostgreSQL is unavailable.
+- Required remediation: make production startup fail closed when required database configuration/connection is absent; restrict in-memory fallback to explicit local development/test mode; return controlled service-unavailable errors instead of silently accepting writes that may not persist.
+
+### High — demo password exceptions remain in server database layer
+- The normal database registration path uses PBKDF2, but the verifier still contains hard-coded legacy exceptions (around lines 36–54). A server-side fallback accepting fixed passwords defeats the normal per-user hash check.
+
+### High — sensitive health data and uploads need further review
+- The server accepts large JSON/base64 prescription payloads in addition to multipart uploads. Combined with a 100 MB global body parser limit, this creates avoidable memory/availability risk.
+- Prescription scan/approval routes must authenticate the patient and bind uploaded document ownership to the authenticated user before OCR or approval.
+- Audit logs should avoid unnecessary sensitive health details and must not be treated as a substitute for authorization.
