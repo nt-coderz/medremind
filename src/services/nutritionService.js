@@ -12,6 +12,7 @@ const TARGETS_STORAGE_KEY = 'medremind_nutrition_targets';
 
 function getCurrentPatientId() {
   try {
+    if (!localStorage.getItem('medremind_auth_token')) return null;
     const user = JSON.parse(localStorage.getItem('medremind_auth_user') || 'null');
     return user?.id || null;
   } catch {
@@ -142,7 +143,7 @@ export async function deleteFoodLog(id, patientId = getCurrentPatientId()) {
 
   // 2. Delete on backend
   try {
-    await apiFetch(`/food-logs/${id}?patientId=${patientId}`, {
+    await apiFetch(`/food-logs/${id}`, {
       method: 'DELETE'
     }, 6000);
   } catch (err) {
@@ -230,7 +231,7 @@ export async function getNutritionTargets(patientId = getCurrentPatientId()) {
   if (!patientId) return DEFAULT_NUTRITION_TARGETS;
   const targetKey = scopedKey(TARGETS_STORAGE_KEY, patientId);
   try {
-    const res = await apiFetch(`/nutrition-targets?patientId=${patientId}`, {}, 5000);
+    const res = await apiFetch('/nutrition-targets', {}, 5000);
     if (res.ok) {
       const data = await res.json();
       if (data.targets) {
@@ -270,7 +271,7 @@ export async function saveNutritionTargets(patientId = getCurrentPatientId(), ta
     await apiFetch('/nutrition-targets', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ patientId, targets: safeTargets })
+      body: JSON.stringify({ targets: safeTargets })
     }, 5000);
   } catch (e) {
     console.info('[NutritionService] Saved targets locally (offline)');
