@@ -1532,7 +1532,7 @@ app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
       }
 
       // Decode file buffer
-      if (!fileItem.dataBase64 || fileItem.dataBase64.trim().length === 0) {
+      if (typeof fileItem.dataBase64 !== 'string' || fileItem.dataBase64.trim().length === 0) {
         return res.status(400).json({ error: `File "${fileName}" appears empty or corrupted.` });
       }
 
