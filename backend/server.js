@@ -446,8 +446,8 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     const cleanPwd = (password || '').trim();
-    if (cleanPwd.length < 6) {
-      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long.' });
+    if (cleanPwd.length < 8) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 8 characters long.' });
     }
 
     if (role === 'admin' || role?.toLowerCase() === 'administrator') {
@@ -1416,7 +1416,9 @@ Keep your tone friendly, warm, empathetic, and concise. Format responses with cl
  */
 app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
   try {
-    const { files, patientId, mode = 'online' } = req.body;
+    const { files, mode = 'online' } = req.body;
+    const patientId = req.user.role === 'admin' ? req.body.patientId : req.user.id;
+    if (!patientId) return res.status(400).json({ success: false, error: 'Patient ID is required for administrator scans' });
     if (!files || !Array.isArray(files) || files.length === 0) {
       return res.status(400).json({ error: 'No files provided for batch prescription scan' });
     }
@@ -1842,7 +1844,9 @@ app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
  * Prevents creating redundant duplicate active medications when brand and generic match.
  */
 app.post('/api/approve-prescriptions', requirePatientAccess, async (req, res) => {
-  const { batchId, patientId, documents } = req.body;
+  const { batchId, documents } = req.body;
+  const patientId = req.user.role === 'admin' ? req.body.patientId : req.user.id;
+  if (!patientId) return res.status(400).json({ success: false, error: 'Patient ID is required for administrator approval' });
   if (!Array.isArray(documents) || documents.length === 0) {
     return res.status(400).json({ error: 'No documents provided for approval' });
   }
@@ -2096,7 +2100,9 @@ app.post('/api/scan-medicine', requireAuth, upload.single('prescriptionImage'), 
  * Backward compatibility: POST /api/approve-prescription
  */
 app.post('/api/approve-prescription', requirePatientAccess, async (req, res) => {
-  const { prescriptionId, patientId, approvedMedicines } = req.body;
+  const { prescriptionId, approvedMedicines } = req.body;
+  const patientId = req.user.role === 'admin' ? req.body.patientId : req.user.id;
+  if (!patientId) return res.status(400).json({ success: false, error: 'Patient ID is required for administrator approval' });
   if (!prescriptionId || !Array.isArray(approvedMedicines) || approvedMedicines.length === 0) {
     return res.status(400).json({ error: 'Invalid prescription approval request' });
   }
