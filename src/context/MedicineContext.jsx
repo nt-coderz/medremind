@@ -407,7 +407,7 @@ export function MedicineProvider({ children }) {
       if (action.actionId !== 'TAKE' && action.actionId !== 'SKIP') return;
 
       const scheduledTime = extra.scheduledTime || timeSlot;
-      const occurrenceDate = /^\\d{4}-\\d{2}-\\d{2}$/.test(extra.occurrenceDate || '')
+      const occurrenceDate = /^\d{4}-\d{2}-\d{2}$/.test(extra.occurrenceDate || '')
         ? extra.occurrenceDate
         : todayKey;
       const { hours, minutes } = parseArbitraryTime(scheduledTime);
