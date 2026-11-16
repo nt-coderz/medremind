@@ -132,3 +132,22 @@ The following changes have since been committed to `security/medremind-audit-202
 - Existing local JSON/demo records and previously issued tokens should be reviewed and rotated/migrated as part of deployment; these code changes do not retroactively erase old data.
 - Android exact-alarm permission handling, reboot reconciliation, notification action persistence, snooze, and Take/Skip integration remain unimplemented pending focused review and device testing.
 - Do not merge/deploy until the required environment variables are set and all automated/manual verification passes.
+
+
+### Additional alarm and Android hardening committed
+
+- Replaced the daily repeating local notification with a rolling 14-day queue of one-shot reminders. On Android, one-shot alarms can use exact scheduling when the user has granted exact-alarm access; repeating alarms in the Capacitor Android implementation are inexact.
+- Added notification permission and Android exact-alarm status checks, plus a Profile screen control to request notification permission or open Android's exact-alarm settings.
+- The app now rebuilds its rolling queue at startup and when returning to the foreground, preserving snooze notifications during queue refresh.
+- Wired notification actions back into the app's dose ledger: Take and Skip update the same local dose status used by the Schedule screen; Snooze schedules a new reminder. All actions foreground the app so the handler can execute.
+- Matched notification action slot labels to the Schedule screen's dose keys.
+- Disabled Android app backup and production cleartext traffic. Cleartext is enabled only in the debug manifest for local development.
+- Removed `USE_EXACT_ALARM` from the manifest; the app uses user-controlled `SCHEDULE_EXACT_ALARM` access instead.
+- Production startup now also requires strong externally configured `AUTH_SECRET`, `CRON_SECRET`, a configured admin email/hash, exact CORS origins, and a healthy PostgreSQL database.
+
+### Alarm limitations that remain
+
+- The rolling reminder queue covers 14 days and is refreshed when the app launches or resumes. If a user leaves the app unopened beyond that horizon, reminders after the queued window will not be present until the app resumes and refreshes the queue.
+- Android exact-alarm permission is user-controlled. If it is denied, reminders are scheduled as inexact notifications and may be delayed; the app displays the permission state rather than claiming exact delivery.
+- Take/Skip currently update the app's local dose ledger. Server-side dose-log synchronization, conflict handling, and multi-device consistency still need implementation and verification.
+- Device-specific battery optimization, force-stop behavior, OEM background restrictions, reboot restoration, timezone/DST changes, and notification sound/channel behavior have not yet been validated on physical Android devices.
