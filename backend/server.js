@@ -614,6 +614,22 @@ app.get('/api/auth/me', async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, error: 'Unauthenticated' });
   }
+  if (
+    req.user.role === 'admin' &&
+    req.user.email &&
+    req.user.email.toLowerCase() === (process.env.ADMIN_EMAIL || '').trim().toLowerCase()
+  ) {
+    return res.json({
+      success: true,
+      user: {
+        id: req.user.id,
+        name: req.user.name || process.env.ADMIN_NAME || 'System Administrator',
+        email: req.user.email,
+        role: 'admin',
+        status: 'Active'
+      }
+    });
+  }
   const user = await db.findUserById(req.user.id);
   if (!user) {
     return res.status(404).json({ success: false, error: 'User record not found' });
