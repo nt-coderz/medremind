@@ -60,7 +60,7 @@ export async function initNotificationChannels() {
     try {
       // Create high-importance channel with alarm_chime.wav
       await LocalNotifications.createChannel({
-        id: 'medremind_alarms',
+        id: 'medremind_alarms_private',
         name: 'Medication Reminders & Alarms',
         description: 'Critical reminders for prescribed medication timings with alarm sound and vibration',
         importance: 5, // IMPORTANCE_HIGH (Heads-up alert, bypasses basic silence)
@@ -96,7 +96,7 @@ export async function initNotificationChannels() {
       });
 
       channelsInitialized = true;
-      console.log('[Notifications] medremind_alarms channel and actions initialized successfully.');
+      console.log('[Notifications] medremind_alarms_private channel and actions initialized successfully.');
       return true;
     } catch (e) {
       console.error('[Notifications] Channel initialization failed:', e);
@@ -201,7 +201,7 @@ export async function scheduleMedicationDoseNotification(medicine, timeStr, sche
       },
       isExactNotification: useExactAlarm,
       sound: 'alarm_chime.wav',
-      channelId: 'medremind_alarms',
+      channelId: 'medremind_alarms_private',
       actionTypeId: 'MED_REMINDER_ACTIONS',
       extra: {
         medicineId: medicine.id,
@@ -263,7 +263,7 @@ export async function snoozeNotification(medicine, timeSlot, minutes = 10) {
               allowWhileIdle: true
             },
             sound: 'alarm_chime.wav',
-            channelId: 'medremind_alarms',
+            channelId: 'medremind_alarms_private',
             actionTypeId: 'MED_REMINDER_ACTIONS',
             extra: {
               medicineId: medicine.id,
@@ -333,7 +333,7 @@ export async function sendImmediateNotification(title, body) {
             title,
             body,
             schedule: { at: new Date(Date.now() + 500) },
-            channelId: 'medremind_alarms',
+            channelId: 'medremind_alarms_private',
             sound: 'alarm_chime.wav'
           }
         ]
