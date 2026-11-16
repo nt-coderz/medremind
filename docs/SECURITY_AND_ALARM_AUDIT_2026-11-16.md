@@ -223,3 +223,10 @@ The following changes have since been committed to `security/medremind-audit-202
 - GitHub Actions now includes an Android debug APK build using Node 22 and Java 17, Capacitor sync, and Gradle `assembleDebug`.
 - On success, the workflow publishes a 14-day artifact containing `app-debug.apk` and a ZIP of the tracked source tree.
 - This is a debug/test APK, not a signed Play Store release. A production release requires a separately provisioned signing key and secure signing configuration.
+
+
+### Private data filesystem permissions
+
+- Backend data and backup directories are created/restricted to owner-only access (`0700`).
+- Local fallback auth-secret files, durable-store snapshots and backup JSON files are created with owner-only file permissions (`0600`).
+- The uploads root and patient-specific upload directories are restricted to owner-only directory permissions (`0700`).
