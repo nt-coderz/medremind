@@ -1937,7 +1937,7 @@ app.post('/api/approve-prescriptions', requirePatientAccess, async (req, res) =>
       // If this item is recognized as a duplicate of an existing active medication (e.g. P-650 vs Paracetamol 650mg):
       // Update instructions of the existing record instead of creating a second redundant medication!
       if (item.isDuplicateRecord && item.existingMedicationId) {
-        const existIdx = medications.findIndex(m => m.id === item.existingMedicationId);
+        const existIdx = medications.findIndex(m => m.id === item.existingMedicationId && String(m.patientId) === String(registeredUser.id));
         if (existIdx !== -1) {
           medications[existIdx].instructions = item.instructions || medications[existIdx].instructions;
           medications[existIdx].frequency = item.frequency || medications[existIdx].frequency;
