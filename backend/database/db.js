@@ -1251,6 +1251,7 @@ class DatabaseManager {
             fibre_g = EXCLUDED.fibre_g,
             is_estimated = EXCLUDED.is_estimated,
             updated_at = NOW()
+          WHERE food_logs.patient_id = EXCLUDED.patient_id
           RETURNING *
         `;
         const res = await this.pool.query(query, [
@@ -1334,7 +1335,7 @@ class DatabaseManager {
     if (!Array.isArray(this.memory.foodLogs)) this.memory.foodLogs = [];
     const before = this.memory.foodLogs.length;
     this.memory.foodLogs = this.memory.foodLogs.filter(
-      l => !(l.id === id && (!patientId || l.patient_id === patientId || l.patientId === patientId))
+      l => !(l.id === id && String(l.patient_id || l.patientId) === String(patientId))
     );
     this.saveDurableStore();
     return this.memory.foodLogs.length < before;
