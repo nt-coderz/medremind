@@ -660,6 +660,7 @@ class DatabaseManager {
              frequency = EXCLUDED.frequency,
              status = EXCLUDED.status,
              updated_at = NOW()
+           WHERE medications.patient_id = EXCLUDED.patient_id
            RETURNING *`,
           [
             id,
@@ -700,6 +701,10 @@ class DatabaseManager {
     };
     const idx = this.memory.medications.findIndex(m => m.id === id);
     if (idx >= 0) {
+      const existingPatientId = this.memory.medications[idx].patientId || this.memory.medications[idx].patient_id;
+      if (existingPatientId && existingPatientId !== newMed.patientId) {
+        throw new Error('Medication ID belongs to another patient.');
+      }
       this.memory.medications[idx] = { ...this.memory.medications[idx], ...newMed };
     } else {
       this.memory.medications.unshift(newMed);
@@ -717,7 +722,7 @@ class DatabaseManager {
              frequency = COALESCE($2, frequency),
              status = COALESCE($3, status),
              updated_at = NOW()
-           WHERE id = $4 AND ($5::text IS NULL OR patient_id = $5)
+           WHERE id = $4 AND ($5::text IS NULL OR patient_id::text = $5)
            RETURNING *`,
           [updates.instructions || null, updates.frequency || null, updates.status || null, id, patientId]
         );
@@ -742,7 +747,7 @@ class DatabaseManager {
     if (this.isPostgres && this.pool) {
       try {
         const result = await this.pool.query(
-          'DELETE FROM public.medications WHERE id = $1 AND ($2::text IS NULL OR patient_id = $2)',
+          'DELETE FROM public.medications WHERE id = $1 AND ($2::text IS NULL OR patient_id::text = $2)',
           [id, patientId]
         );
         return result.rowCount > 0;
@@ -815,6 +820,7 @@ class DatabaseManager {
              time_display = EXCLUDED.time_display,
              scheduled_dose = EXCLUDED.scheduled_dose,
              is_active = EXCLUDED.is_active
+           WHERE dose_schedules.patient_id = EXCLUDED.patient_id
            RETURNING *`,
           [
             id, schData.medicationId, schData.patientId,
@@ -834,6 +840,9 @@ class DatabaseManager {
     const newSch = { ...schData, id, time: timeDisplay, createdAt: new Date().toISOString() };
     const idx = this.memory.schedules.findIndex(s => s.id === id);
     if (idx >= 0) {
+      if (this.memory.schedules[idx].patientId !== newSch.patientId) {
+        throw new Error('Schedule ID belongs to another patient.');
+      }
       this.memory.schedules[idx] = { ...this.memory.schedules[idx], ...newSch };
     } else {
       this.memory.schedules.push(newSch);
