@@ -248,3 +248,6 @@ The following changes have since been committed to `security/medremind-audit-202
 
 - Native notification action listeners now initialize at app mount and buffer actions until the signed-in patient's dose data is hydrated. Each scheduled notification and snooze carries the owning patient ID; actions from a different or unsigned-in account are ignored.
 - Snooze notifications use the current exact-alarm permission state, and Take/Skip actions are written to the original scheduled local date (including after midnight).
+
+
+- Restored the bundled `alarm_chime.wav` as the sound for the new private Android reminder channel. The channel uses a new ID so Android does not retain the older channel's immutable sound configuration.
