@@ -103,3 +103,32 @@ Further route-by-route inspection found:
 - The server accepts large JSON/base64 prescription payloads in addition to multipart uploads. Combined with a 100 MB global body parser limit, this creates avoidable memory/availability risk.
 - Prescription scan/approval routes must authenticate the patient and bind uploaded document ownership to the authenticated user before OCR or approval.
 - Audit logs should avoid unnecessary sensitive health details and must not be treated as a substitute for authorization.
+
+
+## Remediation progress on this branch
+
+The following changes have since been committed to `security/medremind-audit-2026-11-16` (not merged to `main`):
+
+- Removed the built-in `ADMIN / 123456` authentication path. Administrator sign-in now requires `ADMIN_EMAIL` and a PBKDF2 `ADMIN_PASSWORD_HASH` configured outside the repository.
+- Removed client-side demo/admin login and local password-based authentication. Login and registration now require the backend; cached profile data is not treated as authentication.
+- Removed client persistence of plaintext passwords and sanitized cached registered-user records.
+- Session restoration now validates the bearer token with `/api/auth/me`; expired/invalid sessions are cleared.
+- Removed universal legacy password exceptions from the PBKDF2 verifier and hardened token signature, algorithm, and expiration validation.
+- Supplied invalid bearer tokens are rejected instead of being silently treated as anonymous.
+- Added explicit admin guards to user directory/status, admin account-deletion, and backup routes.
+- Added authenticated patient-access guards to medication, schedule, dose, food, nutrition, consent, chat, and prescription workflows. Patient IDs for writes are bound to the authenticated identity for the covered routes.
+- Medication update/delete database methods now constrain operations by both resource ID and patient owner.
+- Medication and schedule upserts reject cross-patient ID collisions.
+- Removed the server's "first registered user" fallback from patient lookup and made unknown patient IDs return not found.
+- Added a scheduler shared-secret guard for `POST /api/tick`.
+- Restricted CORS to exact configured origins (plus local development origins outside production), reduced global JSON/urlencoded body limits to 10 MB, and made production startup refuse to run without a healthy PostgreSQL connection.
+- Added `backend/SECURITY_SETUP.md` with deployment configuration guidance and `backend/security.test.js` with regression tests for password/JWT validation and key authorization boundaries.
+
+## Remaining work / limitations
+
+- The changes are static code edits only at this point. The backend test suite, frontend lint/build, migration checks, and Android alarm tests have **not yet been executed** in a project runtime.
+- Complete route-by-route review is still required for every prescription upload/approval path, admin feature, notification API, and all database fallback methods.
+- Some resource-level ownership checks still need review, especially schedules, dose logs, nutrition targets, consent records, and any legacy JSON-store routes. Route middleware binds the caller-supplied patient identifier, but not every resource ID has a dedicated owner-scoped database operation yet.
+- Existing local JSON/demo records and previously issued tokens should be reviewed and rotated/migrated as part of deployment; these code changes do not retroactively erase old data.
+- Android exact-alarm permission handling, reboot reconciliation, notification action persistence, snooze, and Take/Skip integration remain unimplemented pending focused review and device testing.
+- Do not merge/deploy until the required environment variables are set and all automated/manual verification passes.
