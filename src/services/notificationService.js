@@ -281,14 +281,14 @@ export async function snoozeNotification(medicine, timeSlot, minutes = 10) {
 /**
  * Cancel all scheduled notifications for a specific medicine (used when deactivated or deleted)
  */
-export async function cancelMedicationNotifications(medicineId, timeSlots = []) {
+export async function cancelMedicationNotifications(medicineId, { includeSnoozes = true } = {}) {
   if (!Capacitor.isNativePlatform()) return;
 
   try {
     const pending = await LocalNotifications.getPending();
     if (pending && pending.notifications) {
       const toCancel = pending.notifications.filter(n => {
-        return n.extra?.medicineId === medicineId;
+        return n.extra?.medicineId === medicineId && (includeSnoozes || !n.extra?.isSnooze);
       });
 
       if (toCancel.length > 0) {
