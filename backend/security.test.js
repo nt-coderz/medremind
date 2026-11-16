@@ -207,3 +207,27 @@ test('prescription batch endpoint caps the number of uploaded documents', async 
   const payload = await response.json();
   assert.match(payload.error, /at most 5/);
 });
+
+
+test('PostgreSQL user lookups do not fall back to stale local account records', async () => {
+  const previousIsPostgres = db.isPostgres;
+  const previousPool = db.pool;
+  const staleUser = {
+    id: `stale-user-${crypto.randomUUID()}`,
+    email: `stale-${crypto.randomUUID()}@example.test`,
+    name: 'Stale Local User',
+    role: 'patient'
+  };
+  db.memory.users.push(staleUser);
+  db.isPostgres = true;
+  db.pool = { query: async () => ({ rows: [] }) };
+
+  try {
+    assert.equal(await db.findUserById(staleUser.id), null);
+    assert.equal(await db.findUserByEmailOrId(staleUser.email), null);
+  } finally {
+    db.isPostgres = previousIsPostgres;
+    db.pool = previousPool;
+    db.memory.users = db.memory.users.filter(user => user.id !== staleUser.id);
+  }
+});
