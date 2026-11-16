@@ -411,7 +411,7 @@ class DatabaseManager {
            RETURNING user_id as id, email, full_name as name, role, status, registered_at as "registeredAt"`,
           [newStatus, userId]
         );
-        if (res.rows.length > 0) return res.rows[0];
+        return res.rows[0] || null;
       } catch (err) {
         console.error('[Database] PostgreSQL updateUserStatus error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
@@ -473,6 +473,7 @@ class DatabaseManager {
           }, 'PROFILE', userId);
           return res.rows[0];
         }
+        if (process.env.NODE_ENV === 'production') return null;
       } catch (err) {
         console.error('[Database] PostgreSQL scheduleUserDeletion error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
@@ -518,6 +519,7 @@ class DatabaseManager {
           }, 'PROFILE', userId);
           return res.rows[0];
         }
+        if (process.env.NODE_ENV === 'production') return null;
       } catch (err) {
         console.error('[Database] PostgreSQL cancelUserDeletion error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
