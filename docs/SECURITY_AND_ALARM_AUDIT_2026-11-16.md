@@ -191,3 +191,6 @@ The following changes have since been committed to `security/medremind-audit-202
 
 
 - Removed the global localStorage administrator user-directory cache. The admin user list is now fetched from the protected API and held in memory only; it is cleared on logout, invalid sessions, and account changes.
+
+
+- Removed persistence of the global administrator user directory and activity/audit feed from localStorage. Both are now session-memory data; the protected user list is fetched from the backend, and legacy local caches are cleared.
