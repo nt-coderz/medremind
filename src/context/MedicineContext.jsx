@@ -1,10 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { App } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 import { format } from 'date-fns';
 import { 
   scheduleMedicationDoseNotification, 
   cancelMedicationNotifications, 
   snoozeNotification, 
-  parseArbitraryTime 
+  parseArbitraryTime,
+  setNotificationActionHandler
 } from '../services/notificationService';
 import { toast } from 'sonner';
 
@@ -338,6 +341,93 @@ export function MedicineProvider({ children }) {
   const markNotificationRead = (id) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
   };
+
+  // Notification actions update the same local dose ledger used by the Schedule screen.
+  useEffect(() => {
+    setNotificationActionHandler(async (action) => {
+      const extra = action.notification?.extra || {};
+      const med = medicines.find(item => item.id === extra.medicineId);
+      if (!med || med.status === 'Inactive') return;
+
+      const timeSlot = extra.timeSlot || med.timeSlots?.[0] || extra.scheduledTime || 'Dose';
+      if (action.actionId === 'SNOOZE_10') {
+        await snoozeNotification(med, timeSlot, 10);
+        return;
+      }
+      if (action.actionId !== 'TAKE' && action.actionId !== 'SKIP') return;
+
+      const scheduledTime = extra.scheduledTime || timeSlot;
+      const { hours, minutes } = parseArbitraryTime(scheduledTime);
+      const dueAt = new Date();
+      dueAt.setHours(hours, minutes, 0, 0);
+      if (dueAt.getTime() - Date.now() > 60000) return;
+
+      const status = action.actionId === 'TAKE' ? 'taken' : 'skipped';
+      const timestamp = format(new Date(), 'hh:mm a');
+      setDoseLogs(prev => ({
+        ...prev,
+        [todayKey]: {
+          ...(prev[todayKey] || {}),
+          [`${med.id}_${timeSlot}`]: { status, timestamp }
+        }
+      }));
+
+      const notif = {
+        id: `notif-${Date.now()}`,
+        time: timestamp,
+        read: false,
+        title: status === 'taken' ? `Dose Taken: ${med.name}` : `Dose Skipped: ${med.name}`,
+        message: `${med.name} was marked as ${status} from its reminder notification.`,
+        type: status === 'taken' ? 'success' : 'warning'
+      };
+      setNotifications(prev => [notif, ...prev]);
+    });
+
+    return () => setNotificationActionHandler(null);
+  }, [medicines, todayKey]);
+
+  // Rebuild a rolling queue on app launch and whenever the app returns to foreground.
+  useEffect(() => {
+    let disposed = false;
+    let refreshing = false;
+    let appStateListener = null;
+
+    const refreshAlarmQueue = async () => {
+      if (disposed || refreshing || !Capacitor.isNativePlatform()) return;
+      refreshing = true;
+      try {
+        for (const med of medicines) {
+          await cancelMedicationNotifications(med.id, { includeSnoozes: false });
+        }
+        for (const med of medicines.filter(item => item.status === 'Active')) {
+          const slots = med.times?.length ? med.times : (med.timeSlots || ['08:00 AM']);
+          for (const time of slots) {
+            if (disposed) return;
+            await scheduleMedicationDoseNotification(med, time, med.id);
+          }
+        }
+      } catch (error) {
+        console.error('[Alarm Service] Failed to refresh reminder queue:', error);
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    refreshAlarmQueue();
+    if (Capacitor.isNativePlatform()) {
+      App.addListener('appStateChange', ({ isActive }) => {
+        if (isActive) refreshAlarmQueue();
+      }).then(listener => {
+        if (disposed) listener.remove();
+        else appStateListener = listener;
+      }).catch(error => console.warn('[Alarm Service] App-state listener failed:', error));
+    }
+
+    return () => {
+      disposed = true;
+      appStateListener?.remove();
+    };
+  }, [medicines]);
 
   // Metrics computation for dashboard
   const getTodayMetrics = () => {
