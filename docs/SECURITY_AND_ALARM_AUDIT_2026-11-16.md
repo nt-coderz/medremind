@@ -188,3 +188,6 @@ The following changes have since been committed to `security/medremind-audit-202
 
 
 - Removed the reference to a missing `alarm_chime.wav` asset. The private notification channel now uses Android's system default notification sound instead of risking silent notifications from a nonexistent custom sound file.
+
+
+- Removed the global localStorage administrator user-directory cache. The admin user list is now fetched from the protected API and held in memory only; it is cleared on logout, invalid sessions, and account changes.
