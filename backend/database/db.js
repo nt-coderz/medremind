@@ -11,8 +11,9 @@ const __dirname = path.dirname(__filename);
 const dataDir = path.join(__dirname, '..', 'data');
 const backupsDir = path.join(dataDir, 'backups');
 
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true, mode: 0o700 });
+try { fs.chmodSync(dataDir, 0o700); fs.chmodSync(backupsDir, 0o700); } catch {}
 
 // Secret management for auth tokens
 const SECRET_FILE = path.join(dataDir, '.auth_secret');
@@ -22,7 +23,7 @@ if (!AUTH_SECRET) {
     AUTH_SECRET = fs.readFileSync(SECRET_FILE, 'utf-8').trim();
   } else {
     AUTH_SECRET = crypto.randomBytes(32).toString('hex');
-    try { fs.writeFileSync(SECRET_FILE, AUTH_SECRET); } catch (e) {}
+    try { fs.writeFileSync(SECRET_FILE, AUTH_SECRET, { mode: 0o600 }); } catch (e) {}
   }
 }
 
@@ -209,7 +210,7 @@ class DatabaseManager {
   saveDurableStore() {
     try {
       const tempFile = `${STORE_FILE}.tmp.${Date.now()}`;
-      fs.writeFileSync(tempFile, JSON.stringify(this.memory, null, 2), 'utf-8');
+      fs.writeFileSync(tempFile, JSON.stringify(this.memory, null, 2), { encoding: 'utf-8', mode: 0o600 });
       fs.renameSync(tempFile, STORE_FILE);
     } catch (err) {
       console.error('[Database] Error saving durable store:', err);
@@ -233,7 +234,7 @@ class DatabaseManager {
       },
       data: this.memory
     };
-    fs.writeFileSync(backupFile, JSON.stringify(payload, null, 2), 'utf-8');
+    fs.writeFileSync(backupFile, JSON.stringify(payload, null, 2), { encoding: 'utf-8', mode: 0o600 });
     return {
       success: true,
       backupFile: path.basename(backupFile),
