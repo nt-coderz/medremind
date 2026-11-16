@@ -11,7 +11,7 @@ export function AuthProvider({ children }) {
   // Restore a session only after the server validates its bearer token.
   const [currentUser, setCurrentUser] = useState(null);
 
-  // Registered users database for Admin management (initializes with demo patient if empty)
+  // Administrator user directory is fetched from the protected backend and held in memory.
   const [registeredUsers, setRegisteredUsers] = useState([]);
 
   useEffect(() => {
