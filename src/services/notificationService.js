@@ -306,6 +306,15 @@ export async function cancelMedicationNotifications(medicineId, { includeSnoozes
   }
 }
 
+export async function cancelAllMedicationNotifications() {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await LocalNotifications.cancelAll();
+  } catch (error) {
+    console.warn('[Notifications] Could not clear pending notifications:', error);
+  }
+}
+
 /**
  * Send an immediate test or urgent alert notification
  */
