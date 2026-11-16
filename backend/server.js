@@ -878,7 +878,7 @@ app.get('/api/medications', requirePatientAccess, async (req, res) => {
 app.post('/api/medications', requirePatientAccess, async (req, res) => {
   try {
     const med = await db.saveMedication({ ...req.body, patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id });
-    await db.logAudit('MEDICATION_CREATED', req.body.patientId || req.user?.id, { medicationId: med.id, name: med.name });
+    await db.logAudit('MEDICATION_CREATED', req.user.id, { patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id, medicationId: med.id, name: med.name });
     res.status(201).json({ success: true, medication: med });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
@@ -918,7 +918,7 @@ app.post('/api/food-logs', requirePatientAccess, async (req, res) => {
   try {
     const patientId = req.user.role === 'admin' ? (req.body.patient_id || req.body.patientId || req.user.id) : req.user.id;
     const log = await db.saveFoodLog({ ...req.body, patient_id: patientId });
-    await db.logAudit('FOOD_LOG_CREATED', patientId, { logId: log.id, foodName: log.food_name, calories: log.calories });
+    await db.logAudit('FOOD_LOG_CREATED', req.user.id, { patientId, logId: log.id, foodName: log.food_name, calories: log.calories });
     res.status(201).json({ success: true, log });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
@@ -1105,7 +1105,7 @@ app.post('/api/consents/revoke', requirePatientAccess, async (req, res) => {
   const userId = req.user.role === 'admin' ? (req.body.userId || req.user.id) : req.user.id;
   if (!userId) return res.status(400).json({ error: 'User ID required' });
   const success = await db.revokeConsent(userId, reason);
-  await db.logAudit('STATUTORY_CONSENT_REVOKED', userId, { reason });
+  await db.logAudit('STATUTORY_CONSENT_REVOKED', req.user.id, { subjectUserId: userId, reason });
   res.json({ success, message: success ? 'Consent revoked successfully' : 'No active consent found' });
 });
 
