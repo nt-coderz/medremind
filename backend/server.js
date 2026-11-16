@@ -172,21 +172,61 @@ function requireSchedulerSecret(req, res, next) {
   next();
 }
 
-// Directories
+// Private health-document storage. Patient identifiers are hashed before use as
+// directory names; original filenames are never used as filesystem paths.
 const uploadsDir = path.join(__dirname, 'uploads');
 const dataDir = path.join(__dirname, 'data');
 
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-app.use('/uploads', express.static(uploadsDir));
+function getPatientUploadDir(patientId) {
+  if (!patientId) throw new Error('Authenticated patient ID is required for file storage.');
+  const patientKey = crypto.createHash('sha256').update(String(patientId)).digest('hex');
+  const directory = path.join(uploadsDir, patientKey);
+  fs.mkdirSync(directory, { recursive: true });
+  return directory;
+}
 
-// Multer Storage Configuration
+function createPrivateMediaUrl(patientId, filePath) {
+  const filename = path.basename(filePath);
+  const token = generateToken({ id: String(patientId), role: 'media', filename }, 1 / 6);
+  return `/api/media/${token}`;
+}
+
+// Short-lived signed image URLs allow native/browser image elements to load
+// previews without exposing the uploads directory or requiring custom headers.
+app.get('/api/media/:token', (req, res) => {
+  const media = verifyToken(req.params.token);
+  if (!media || media.role !== 'media' || !media.id ||
+      typeof media.filename !== 'string' ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,180}$/.test(media.filename)) {
+    return res.status(401).json({ success: false, error: 'Invalid or expired media link' });
+  }
+
+  const directory = getPatientUploadDir(media.id);
+  const filePath = path.resolve(directory, media.filename);
+  if (!filePath.startsWith(directory + path.sep) || !fs.existsSync(filePath)) {
+    return res.status(404).json({ success: false, error: 'File not found' });
+  }
+
+  res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  return res.sendFile(filePath);
+});
+
+// Multer Storage Configuration. Multer runs after authentication middleware.
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
+  destination: (req, file, cb) => {
+    try {
+      cb(null, getPatientUploadDir(req.user?.id));
+    } catch (error) {
+      cb(error);
+    }
+  },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.jpg';
-    cb(null, `rx-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, `rx-${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
   }
 });
 const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
