@@ -85,7 +85,7 @@ export async function sendQueryToMedi({ message, history = [], user, medicines =
   }
 
   // Tier 2: Direct Google Gemini REST API using VITE_GEMINI_API_KEY
-  const geminiKey = import.meta.env.VITE_GEMINI_API_KEY || ;
+  const geminiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 
   if (geminiKey && isOnline()) {
     try {
