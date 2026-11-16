@@ -420,7 +420,7 @@ export function MedicineProvider({ children }) {
       setDoseLogs(prev => ({
         ...prev,
         [occurrenceDate]: {
-          ...(prev[todayKey] || {}),
+          ...(prev[occurrenceDate] || {}),
           [`${med.id}_${timeSlot}`]: { status, timestamp }
         }
       }));
