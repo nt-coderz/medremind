@@ -175,6 +175,8 @@ export async function scheduleMedicationDoseNotification(medicine, timeStr, sche
     const parsed = parseArbitraryTime(slot);
     return parsed.hours === hours && parsed.minutes === minutes;
   }) || timeStr;
+  const permissionStatus = await getAlarmPermissionStatus();
+  const useExactAlarm = Capacitor.getPlatform() !== 'android' || permissionStatus.exactAlarm === 'granted';
   const notifications = [];
 
   for (let dayOffset = 0; dayOffset < SCHEDULE_HORIZON_DAYS; dayOffset++) {
@@ -197,7 +199,7 @@ export async function scheduleMedicationDoseNotification(medicine, timeStr, sche
         at: scheduledDate,
         allowWhileIdle: true
       },
-      isExactNotification: true,
+      isExactNotification: useExactAlarm,
       sound: 'alarm_chime.wav',
       channelId: 'medremind_alarms',
       actionTypeId: 'MED_REMINDER_ACTIONS',
@@ -222,6 +224,7 @@ export async function scheduleMedicationDoseNotification(medicine, timeStr, sche
       success: true,
       scheduled: notifications.length,
       exactAlarm: permissionStatus.exactAlarm,
+      usedExactAlarm: useExactAlarm,
       warning: result.warning || null
     };
   } catch (error) {
