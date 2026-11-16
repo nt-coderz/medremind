@@ -106,7 +106,7 @@ test('prescription media is not publicly served and signed previews are time-lim
   const otherPatientResponse = await fetch(`${baseUrl}/api/media/${otherPatientToken}`);
   assert.equal(otherPatientResponse.status, 404);
 
-  const tamperedToken = `${token.slice(0, -1)}x`;
+  const tamperedToken = `${token.slice(0, -1)}${token.endsWith('a') ? 'b' : 'a'}`;
   const tamperedResponse = await fetch(`${baseUrl}/api/media/${tamperedToken}`);
   assert.equal(tamperedResponse.status, 401);
 });
