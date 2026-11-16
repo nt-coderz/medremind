@@ -4,11 +4,10 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - security/medremind-audit-2026-11-16
   workflow_dispatch:
-
-concurrency:
-  group: security-validation-${{ github.event.pull_request.head.ref || github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
