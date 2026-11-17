@@ -317,6 +317,14 @@ test('PostgreSQL dose logs persist against a real schedule and can be retrieved'
     assert.equal(logs[0].patientId, 'patient-dose-test');
     assert.equal(logs[0].status, 'taken');
     assert.equal(logs[0].timeSlot, '08:00 AM');
+    const doseToken = generateToken({ id: 'patient-dose-test', role: 'patient' });
+    const response = await fetch(`${baseUrl}/api/dose-logs?date=${today}`, {
+      headers: { Authorization: `Bearer ${doseToken}` }
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.logs.length, 1);
+    assert.equal(payload.logs[0].status, 'taken');
   } finally {
     db.isPostgres = previousIsPostgres;
     db.pool = previousPool;
