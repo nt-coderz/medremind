@@ -995,7 +995,15 @@ class DatabaseManager {
 
     if (this.isPostgres && this.pool) {
       try {
-        const requestedTime = normalizeTimeTo24Hour(scheduledTime || timeSlot);
+        const rawTime = scheduledTime || timeSlot;
+        let requestedTime;
+        try {
+          requestedTime = normalizeTimeTo24Hour(rawTime);
+        } catch (timeError) {
+          const embeddedTime = String(rawTime || '').match(/\\b\\d{1,2}:\\d{2}\\s*(?:AM|PM)?\\b/i)?.[0];
+          if (!embeddedTime) throw timeError;
+          requestedTime = normalizeTimeTo24Hour(embeddedTime);
+        }
         const scheduleResult = await this.pool.query(
           `SELECT id FROM public.dose_schedules
            WHERE patient_id = $1 AND medication_id = $2
