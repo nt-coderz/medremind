@@ -885,6 +885,46 @@ class DatabaseManager {
   // Dose Logs Operations
   // -------------------------------------------------------------
   async getDoseLogs(patientId, dateKey) {
+    if (this.isPostgres && this.pool) {
+      try {
+        const conditions = [];
+        const params = [];
+        if (patientId) {
+          params.push(patientId);
+          conditions.push(`d.patient_id = ${params.length}`);
+        }
+        if (dateKey) {
+          params.push(dateKey);
+          conditions.push(`d.scheduled_date = ${params.length}::date`);
+        }
+        const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+        const result = await this.pool.query(
+          `SELECT d.id, d.patient_id, d.medication_id, d.scheduled_date::text AS date_key,
+                  d.scheduled_timestamp, d.status, d.recorded_at, d.notes,
+                  s.time_display, s.time_slot_label
+           FROM public.dose_occurrences d
+           LEFT JOIN public.dose_schedules s ON s.id = d.schedule_id
+           ${where}
+           ORDER BY d.scheduled_timestamp DESC`,
+          params
+        );
+        return result.rows.map(row => ({
+          id: row.id,
+          patientId: row.patient_id,
+          medicationId: row.medication_id,
+          dateKey: row.date_key,
+          timeSlot: row.time_display || row.time_slot_label || '',
+          scheduledTime: row.scheduled_timestamp,
+          status: String(row.status || '').toLowerCase(),
+          recordedAt: row.recorded_at,
+          notes: row.notes
+        }));
+      } catch (err) {
+        console.error('[Database] PostgreSQL getDoseLogs error:', err.message);
+        if (process.env.NODE_ENV === 'production') throw err;
+      }
+    }
+
     return this.memory.doseLogs.filter(l => {
       if (patientId && l.patientId !== patientId) return false;
       if (dateKey && l.dateKey !== dateKey) return false;
@@ -955,13 +995,31 @@ class DatabaseManager {
 
     if (this.isPostgres && this.pool) {
       try {
+        const requestedTime = normalizeTimeTo24Hour(scheduledTime || timeSlot);
+        const scheduleResult = await this.pool.query(
+          `SELECT id FROM public.dose_schedules
+           WHERE patient_id = $1 AND medication_id = $2
+             AND scheduled_time = $3::time AND is_active = true
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          [patientId, medicationId, requestedTime]
+        );
+        const schedule = scheduleResult.rows[0];
+        if (!schedule) {
+          throw new Error('No active dose schedule matches this medication, patient, and time.');
+        }
+
         await this.pool.query(
-          `INSERT INTO public.dose_occurrences 
-             (patient_id, medication_id, scheduled_date, scheduled_timestamp, status, recorded_at, notes)
-           VALUES 
-             ($1, $2, $3, NOW(), $4, NOW(), $5)
-           ON CONFLICT DO NOTHING`,
-          [patientId, medicationId, targetDateKey, status.toUpperCase(), `Recorded via ${status}`]
+          `INSERT INTO public.dose_occurrences
+             (schedule_id, medication_id, patient_id, scheduled_date, scheduled_timestamp, status, recorded_at, notes)
+           VALUES
+             ($1, $2, $3, $4::date, ($4::date + $5::time), $6, NOW(), $7)
+           ON CONFLICT (schedule_id, scheduled_date) DO UPDATE SET
+             scheduled_timestamp = EXCLUDED.scheduled_timestamp,
+             status = EXCLUDED.status,
+             recorded_at = NOW(),
+             notes = EXCLUDED.notes`,
+          [schedule.id, medicationId, patientId, targetDateKey, requestedTime, status.toUpperCase(), `Recorded via ${status}`]
         );
       } catch (err) {
         console.error('[Database] PostgreSQL recordDoseLog error:', err.message);
