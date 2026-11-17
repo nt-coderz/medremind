@@ -44,7 +44,7 @@ import { toast } from 'sonner';
 export default function NutritionPage() {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const patientId = currentUser?.id || 'USR-patient';
+  const patientId = currentUser?.id || null;
 
   // Date State (YYYY-MM-DD)
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -74,6 +74,7 @@ export default function NutritionPage() {
 
   // Load Targets on mount
   useEffect(() => {
+    if (!patientId) return;
     getNutritionTargets(patientId).then(t => {
       setTargets(t);
       setTargetForm(t);
@@ -82,6 +83,11 @@ export default function NutritionPage() {
 
   // Load Logs whenever selectedDate changes
   useEffect(() => {
+    if (!patientId) {
+      setLogs([]);
+      setLoading(false);
+      return undefined;
+    }
     let isMounted = true;
     setLoading(true);
     getFoodLogs({ date: selectedDate, patientId })

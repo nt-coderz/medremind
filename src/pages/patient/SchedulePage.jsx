@@ -109,7 +109,12 @@ export default function SchedulePage() {
               ) : (
                 slotMeds.map((med) => {
                   const fullSlotString = `${slot.name} (${slot.time})`;
-                  const doseStatus = getDoseStatus(med.id, fullSlotString) || getDoseStatus(med.id, med.timeSlots?.[0]);
+                  const matchingSlotLabel = (med.timeSlots || []).find(ts =>
+                    ts.toLowerCase().includes(slot.name.toLowerCase())
+                  );
+                  const doseStatus = getDoseStatus(med.id, fullSlotString) ||
+                    getDoseStatus(med.id, matchingSlotLabel) ||
+                    getDoseStatus(med.id, med.timeSlots?.[0]);
                   const isTaken = doseStatus?.status === 'taken';
                   const isSkipped = doseStatus?.status === 'skipped';
                   const isPending = !isTaken && !isSkipped;

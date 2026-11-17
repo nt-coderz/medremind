@@ -9,7 +9,21 @@ import { searchFoodCatalog, calculateItemNutrition, calculateMacroPercentages, F
 
 const LOCAL_STORAGE_KEY = 'medremind_food_logs';
 const TARGETS_STORAGE_KEY = 'medremind_nutrition_targets';
-const SYNC_QUEUE_KEY = 'medremind_food_sync_queue';
+
+function getCurrentPatientId() {
+  try {
+    if (!localStorage.getItem('medremind_auth_token')) return null;
+    const user = JSON.parse(localStorage.getItem('medremind_auth_user') || 'null');
+    return user?.id || null;
+  } catch {
+    return null;
+  }
+}
+
+function scopedKey(key, patientId) {
+  if (!patientId) throw new Error('A validated patient session is required.');
+  return `${key}:${patientId}`;
+}
 
 export const DEFAULT_NUTRITION_TARGETS = {
   calories: 2000,
@@ -19,18 +33,18 @@ export const DEFAULT_NUTRITION_TARGETS = {
   fibre: 30
 };
 
-function getLocalLogs() {
+function getLocalLogs(patientId) {
   try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    const raw = localStorage.getItem(scopedKey(LOCAL_STORAGE_KEY, patientId));
     return raw ? JSON.parse(raw) : [];
   } catch (e) {
     return [];
   }
 }
 
-function saveLocalLogs(logs) {
+function saveLocalLogs(logs, patientId) {
   try {
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(logs));
+    localStorage.setItem(scopedKey(LOCAL_STORAGE_KEY, patientId), JSON.stringify(logs));
   } catch (e) {
     console.warn('[NutritionService] LocalStorage write error:', e);
   }
@@ -39,19 +53,20 @@ function saveLocalLogs(logs) {
 /**
  * Fetch daily food logs for patient on a specific date (YYYY-MM-DD)
  */
-export async function getFoodLogs({ date, patientId = 'USR-patient' }) {
+export async function getFoodLogs({ date, patientId = getCurrentPatientId() }) {
+  if (!patientId) return [];
   const targetDate = date || new Date().toISOString().split('T')[0];
 
   // Try online backend first
   try {
-    const res = await apiFetch(`/food-logs?date=${targetDate}&patientId=${patientId}`, {}, 8000);
+    const res = await apiFetch(`/food-logs?date=${targetDate}`, {}, 8000);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.logs)) {
         // Merge into local cache
-        const allLocal = getLocalLogs();
+        const allLocal = getLocalLogs(patientId);
         const otherDates = allLocal.filter(l => !(l.log_date === targetDate && l.patient_id === patientId));
-        saveLocalLogs([...otherDates, ...data.logs]);
+        saveLocalLogs([...otherDates, ...data.logs], patientId);
         return data.logs;
       }
     }
@@ -60,7 +75,7 @@ export async function getFoodLogs({ date, patientId = 'USR-patient' }) {
   }
 
   // Fallback to offline localStorage
-  const local = getLocalLogs();
+  const local = getLocalLogs(patientId);
   return local.filter(l => (l.log_date === targetDate || l.date === targetDate) && (l.patient_id === patientId || l.patientId === patientId));
 }
 
@@ -73,7 +88,7 @@ export async function addFoodLog(entry) {
 
   const fullEntry = {
     id: logId,
-    patient_id: entry.patient_id || entry.patientId || 'USR-patient',
+    patient_id: entry.patient_id || entry.patientId || getCurrentPatientId(),
     food_name: entry.food_name || entry.name || 'Food Item',
     quantity: Number(entry.quantity) || 1,
     unit: entry.unit || 'serving',
@@ -91,9 +106,11 @@ export async function addFoodLog(entry) {
     created_at: new Date().toISOString()
   };
 
-  // 1. Immediately persist to local storage (Offline First)
-  const currentLogs = getLocalLogs();
-  saveLocalLogs([fullEntry, ...currentLogs]);
+  if (!fullEntry.patient_id) throw new Error('Please sign in before adding food logs.');
+
+  // 1. Immediately persist to the current patient's local storage (Offline First)
+  const currentLogs = getLocalLogs(fullEntry.patient_id);
+  saveLocalLogs([fullEntry, ...currentLogs], fullEntry.patient_id);
 
   // 2. Sync to online backend if available
   try {
@@ -117,15 +134,16 @@ export async function addFoodLog(entry) {
 /**
  * Delete a food log entry
  */
-export async function deleteFoodLog(id, patientId = 'USR-patient') {
-  // 1. Remove from local storage
-  const currentLogs = getLocalLogs();
+export async function deleteFoodLog(id, patientId = getCurrentPatientId()) {
+  if (!patientId) return false;
+  // 1. Remove from this patient's local storage only
+  const currentLogs = getLocalLogs(patientId);
   const updated = currentLogs.filter(l => l.id !== id);
-  saveLocalLogs(updated);
+  saveLocalLogs(updated, patientId);
 
   // 2. Delete on backend
   try {
-    await apiFetch(`/food-logs/${id}?patientId=${patientId}`, {
+    await apiFetch(`/food-logs/${id}`, {
       method: 'DELETE'
     }, 6000);
   } catch (err) {
@@ -209,13 +227,15 @@ export async function lookupFoodItem(foodName, quantity = 1, unit = null) {
 /**
  * Fetch daily nutrition targets
  */
-export async function getNutritionTargets(patientId = 'USR-patient') {
+export async function getNutritionTargets(patientId = getCurrentPatientId()) {
+  if (!patientId) return DEFAULT_NUTRITION_TARGETS;
+  const targetKey = scopedKey(TARGETS_STORAGE_KEY, patientId);
   try {
-    const res = await apiFetch(`/nutrition-targets?patientId=${patientId}`, {}, 5000);
+    const res = await apiFetch('/nutrition-targets', {}, 5000);
     if (res.ok) {
       const data = await res.json();
       if (data.targets) {
-        localStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(data.targets));
+        localStorage.setItem(targetKey, JSON.stringify(data.targets));
         return data.targets;
       }
     }
@@ -224,7 +244,7 @@ export async function getNutritionTargets(patientId = 'USR-patient') {
   }
 
   try {
-    const cached = localStorage.getItem(TARGETS_STORAGE_KEY);
+    const cached = localStorage.getItem(targetKey);
     if (cached) return JSON.parse(cached);
   } catch (e) {}
 
@@ -234,7 +254,9 @@ export async function getNutritionTargets(patientId = 'USR-patient') {
 /**
  * Save daily nutrition targets
  */
-export async function saveNutritionTargets(patientId = 'USR-patient', targets) {
+export async function saveNutritionTargets(patientId = getCurrentPatientId(), targets) {
+  if (!patientId) throw new Error('Please sign in before saving nutrition targets.');
+  const targetKey = scopedKey(TARGETS_STORAGE_KEY, patientId);
   const safeTargets = {
     calories: Math.max(500, Math.min(10000, Number(targets.calories) || 2000)),
     protein: Math.max(10, Math.min(500, Number(targets.protein) || 60)),
@@ -243,13 +265,13 @@ export async function saveNutritionTargets(patientId = 'USR-patient', targets) {
     fibre: Math.max(0, Math.min(200, Number(targets.fibre) || 30))
   };
 
-  localStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(safeTargets));
+  localStorage.setItem(targetKey, JSON.stringify(safeTargets));
 
   try {
     await apiFetch('/nutrition-targets', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ patientId, targets: safeTargets })
+      body: JSON.stringify({ targets: safeTargets })
     }, 5000);
   } catch (e) {
     console.info('[NutritionService] Saved targets locally (offline)');

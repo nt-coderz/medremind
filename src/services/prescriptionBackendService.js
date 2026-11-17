@@ -5,7 +5,7 @@
  * and local dev preview when on localhost.
  */
 
-import { getApiBaseUrl, apiFetch } from '../config/apiConfig';
+import { apiFetch } from '../config/apiConfig';
 
 /**
  * Fetch recognition engine status (Gemini + Tesseract)

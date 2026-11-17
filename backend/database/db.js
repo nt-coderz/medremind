@@ -5,14 +5,21 @@ import pg from 'pg';
 import { fileURLToPath } from 'url';
 import { normalizeTimeTo24Hour } from '../utils/timeUtils.js';
 import { getDatabaseSslConfig } from './sslConfig.js';
+import dotenv from 'dotenv';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+// Load backend/.env before reading DATABASE_URL or AUTH_SECRET. Static ESM imports
+// are evaluated before server.js executes dotenv.config(), so this module must
+// initialize its own environment before creating the database pool or token secret.
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
+
 const dataDir = path.join(__dirname, '..', 'data');
 const backupsDir = path.join(dataDir, 'backups');
 
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true, mode: 0o700 });
+try { fs.chmodSync(dataDir, 0o700); fs.chmodSync(backupsDir, 0o700); } catch {}
 
 // Secret management for auth tokens
 const SECRET_FILE = path.join(dataDir, '.auth_secret');
@@ -22,9 +29,10 @@ if (!AUTH_SECRET) {
     AUTH_SECRET = fs.readFileSync(SECRET_FILE, 'utf-8').trim();
   } else {
     AUTH_SECRET = crypto.randomBytes(32).toString('hex');
-    try { fs.writeFileSync(SECRET_FILE, AUTH_SECRET); } catch (e) {}
+    try { fs.writeFileSync(SECRET_FILE, AUTH_SECRET, { mode: 0o600 }); } catch (e) {}
   }
 }
+try { if (fs.existsSync(SECRET_FILE)) fs.chmodSync(SECRET_FILE, 0o600); } catch {}
 
 // Password hashing utilities using crypto PBKDF2
 export function hashPassword(plainTextPassword) {
@@ -34,27 +42,20 @@ export function hashPassword(plainTextPassword) {
 }
 
 export function verifyPassword(plainTextPassword, storedHash) {
-  if (!storedHash) return false;
-  // Fallback for legacy demo accounts:
-  if (plainTextPassword === '123456' && (storedHash === '123456' || storedHash.includes('123456'))) return true;
-  if ((plainTextPassword === 'demo123' || plainTextPassword === 'password123') && (storedHash === 'demo123' || storedHash === 'password123')) return true;
-  
+  if (typeof plainTextPassword !== 'string' || typeof storedHash !== 'string') return false;
   const parts = storedHash.split(':');
   if (parts.length !== 2) return false;
   const [salt, originalHash] = parts;
-  const computedHash = crypto.pbkdf2Sync(plainTextPassword, salt, 100000, 64, 'sha512').toString('hex');
-  if (crypto.timingSafeEqual(Buffer.from(computedHash, 'utf-8'), Buffer.from(originalHash, 'utf-8'))) {
-    return true;
+  // PBKDF2-SHA512 with a 16-byte hex salt and 64-byte hex digest.
+  if (!/^[a-f0-9]{32}$/i.test(salt) || !/^[a-f0-9]{128}$/i.test(originalHash)) return false;
+  try {
+    const computedHash = crypto.pbkdf2Sync(plainTextPassword, salt, 100000, 64, 'sha512');
+    const expectedHash = Buffer.from(originalHash, 'hex');
+    return expectedHash.length === computedHash.length &&
+      crypto.timingSafeEqual(computedHash, expectedHash);
+  } catch {
+    return false;
   }
-  // If user used password123 but account had demo123 (or vice-versa) for initial mock accounts:
-  if (plainTextPassword === 'password123' || plainTextPassword === 'demo123') {
-    const altPassword = plainTextPassword === 'password123' ? 'demo123' : 'password123';
-    const altHash = crypto.pbkdf2Sync(altPassword, salt, 100000, 64, 'sha512').toString('hex');
-    if (crypto.timingSafeEqual(Buffer.from(altHash, 'utf-8'), Buffer.from(originalHash, 'utf-8'))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 // Simple signed token generator
@@ -71,15 +72,20 @@ export function verifyToken(token) {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   const [header, body, signature] = parts;
-  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(`${header}.${body}`).digest('base64url');
-  if (signature !== expectedSig) return null;
   try {
+    const parsedHeader = JSON.parse(Buffer.from(header, 'base64url').toString('utf-8'));
+    if (parsedHeader.alg !== 'HS256' || parsedHeader.typ !== 'JWT') return null;
+    const expectedSig = crypto.createHmac('sha256', AUTH_SECRET)
+      .update(`${header}.${body}`).digest();
+    const suppliedSig = Buffer.from(signature, 'base64url');
+    if (suppliedSig.length !== expectedSig.length ||
+        !crypto.timingSafeEqual(suppliedSig, expectedSig)) return null;
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf-8'));
-    if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) {
-      return null; // Expired
-    }
+    const now = Math.floor(Date.now() / 1000);
+    if (!Number.isInteger(payload.exp) || payload.exp <= now) return null;
+    if (!payload.id || !payload.role) return null;
     return payload;
-  } catch (e) {
+  } catch {
     return null;
   }
 }
@@ -211,7 +217,7 @@ class DatabaseManager {
   saveDurableStore() {
     try {
       const tempFile = `${STORE_FILE}.tmp.${Date.now()}`;
-      fs.writeFileSync(tempFile, JSON.stringify(this.memory, null, 2), 'utf-8');
+      fs.writeFileSync(tempFile, JSON.stringify(this.memory, null, 2), { encoding: 'utf-8', mode: 0o600 });
       fs.renameSync(tempFile, STORE_FILE);
     } catch (err) {
       console.error('[Database] Error saving durable store:', err);
@@ -219,26 +225,70 @@ class DatabaseManager {
   }
 
   // Backup strategy
-  createBackup() {
+  async createBackup() {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const backupFile = path.join(backupsDir, `medremind-backup-${timestamp}.json`);
+    let backupData = this.memory;
+
+    // In production, snapshot the authoritative PostgreSQL tables rather than
+    // exporting the local development cache (which may be empty or stale).
+    if (this.isPostgres && this.pool) {
+      const tables = [
+        'profiles',
+        'prescriptions',
+        'prescription_extractions',
+        'medications',
+        'dose_schedules',
+        'dose_occurrences',
+        'caregiver_relationships',
+        'notifications',
+        'audit_logs',
+        'consents',
+        'food_logs',
+        'nutrition_targets'
+      ];
+      const snapshot = {};
+      for (const table of tables) {
+        const result = await this.pool.query(`SELECT * FROM public."${table}"`);
+        snapshot[table] = result.rows;
+      }
+      backupData = snapshot;
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('Production backup requires a healthy PostgreSQL connection.');
+    }
+
+    const counts = this.isPostgres && this.pool
+      ? {
+          users: backupData.profiles?.length || 0,
+          prescriptions: backupData.prescriptions?.length || 0,
+          medications: backupData.medications?.length || 0,
+          schedules: backupData.dose_schedules?.length || 0,
+          doseLogs: backupData.dose_occurrences?.length || 0,
+          consents: backupData.consents?.length || 0,
+          auditLogs: backupData.audit_logs?.length || 0
+        }
+      : {
+          users: backupData.users.length,
+          prescriptions: backupData.prescriptions.length,
+          medications: backupData.medications.length,
+          schedules: backupData.schedules.length,
+          doseLogs: backupData.doseLogs.length,
+          consents: backupData.consents.length,
+          auditLogs: backupData.auditLogs.length
+        };
+
     const payload = {
       backupDate: new Date().toISOString(),
-      counts: {
-        users: this.memory.users.length,
-        prescriptions: this.memory.prescriptions.length,
-        medications: this.memory.medications.length,
-        schedules: this.memory.schedules.length,
-        doseLogs: this.memory.doseLogs.length,
-        consents: this.memory.consents.length,
-        auditLogs: this.memory.auditLogs.length
-      },
-      data: this.memory
+      database: this.isPostgres && this.pool ? 'postgresql' : 'local',
+      counts,
+      data: backupData
     };
-    fs.writeFileSync(backupFile, JSON.stringify(payload, null, 2), 'utf-8');
+    fs.writeFileSync(backupFile, JSON.stringify(payload, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    try { fs.chmodSync(backupFile, 0o600); } catch {}
     return {
       success: true,
       backupFile: path.basename(backupFile),
+      database: payload.database,
       counts: payload.counts
     };
   }
@@ -256,11 +306,11 @@ class DatabaseManager {
           `SELECT user_id as id, email, full_name as name, dob, gender, phone_number as "phoneNumber", allergies, medical_info as "medicalInfo", role, status, password_hash as "passwordHash", registered_at as "registeredAt",
                   scheduled_deletion_at as "scheduledDeletionAt", deletion_requested_by as "deletionRequestedBy", deletion_reason as "deletionReason"
            FROM public.profiles
-           WHERE LOWER(email) = LOWER($1) OR user_id = $1 OR phone_number = $1 OR (LOWER($1) = 'admin' AND role = 'admin')
+           WHERE LOWER(email) = LOWER($1) OR user_id = $1 OR phone_number = $1
            LIMIT 1`,
           [clean]
         );
-        if (res.rows.length > 0) return res.rows[0];
+        return res.rows[0] || null;
       } catch (err) {
         console.error('[Database] PostgreSQL findUser error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
@@ -288,7 +338,7 @@ class DatabaseManager {
            FROM public.profiles WHERE user_id = $1 LIMIT 1`,
           [id]
         );
-        if (res.rows.length > 0) return res.rows[0];
+        return res.rows[0] || null;
       } catch (err) {
         console.error('[Database] PostgreSQL findUserById error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
@@ -321,12 +371,11 @@ class DatabaseManager {
            RETURNING user_id as id, email, full_name as name, allergies, medical_info as "medicalInfo"`,
           [safeAllergies, JSON.stringify(safeMedicalInfo), userId]
         );
-        if (res.rows.length > 0) {
-          return {
-            allergies: res.rows[0].allergies || [],
-            medicalInfo: res.rows[0].medicalInfo || {}
-          };
-        }
+        if (!res.rows.length) return null;
+        return {
+          allergies: res.rows[0].allergies || [],
+          medicalInfo: res.rows[0].medicalInfo || {}
+        };
       } catch (err) {
         console.error('[Database] PostgreSQL updateMedicalInfo error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
@@ -361,7 +410,10 @@ class DatabaseManager {
     }
 
     const uniqueId = userData.id || `USR-${crypto.randomUUID()}`;
-    const pwdHash = userData.passwordHash || hashPassword(userData.password || 'password123');
+    if (!userData.password && !userData.passwordHash) {
+      throw new Error('A password is required when creating a user account.');
+    }
+    const pwdHash = userData.passwordHash || hashPassword(userData.password);
     const role = 'patient';
     const regDate = new Date().toISOString().split('T')[0];
     const dob = userData.dob || null;
@@ -409,7 +461,7 @@ class DatabaseManager {
            RETURNING user_id as id, email, full_name as name, role, status, registered_at as "registeredAt"`,
           [newStatus, userId]
         );
-        if (res.rows.length > 0) return res.rows[0];
+        return res.rows[0] || null;
       } catch (err) {
         console.error('[Database] PostgreSQL updateUserStatus error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
@@ -471,6 +523,7 @@ class DatabaseManager {
           }, 'PROFILE', userId);
           return res.rows[0];
         }
+        if (process.env.NODE_ENV === 'production') return null;
       } catch (err) {
         console.error('[Database] PostgreSQL scheduleUserDeletion error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
@@ -516,6 +569,7 @@ class DatabaseManager {
           }, 'PROFILE', userId);
           return res.rows[0];
         }
+        if (process.env.NODE_ENV === 'production') return null;
       } catch (err) {
         console.error('[Database] PostgreSQL cancelUserDeletion error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
@@ -662,6 +716,7 @@ class DatabaseManager {
              frequency = EXCLUDED.frequency,
              status = EXCLUDED.status,
              updated_at = NOW()
+           WHERE medications.patient_id = EXCLUDED.patient_id
            RETURNING *`,
           [
             id,
@@ -702,6 +757,10 @@ class DatabaseManager {
     };
     const idx = this.memory.medications.findIndex(m => m.id === id);
     if (idx >= 0) {
+      const existingPatientId = this.memory.medications[idx].patientId || this.memory.medications[idx].patient_id;
+      if (existingPatientId && existingPatientId !== newMed.patientId) {
+        throw new Error('Medication ID belongs to another patient.');
+      }
       this.memory.medications[idx] = { ...this.memory.medications[idx], ...newMed };
     } else {
       this.memory.medications.unshift(newMed);
@@ -710,7 +769,7 @@ class DatabaseManager {
     return newMed;
   }
 
-  async updateMedication(id, updates) {
+  async updateMedication(id, updates, patientId = null) {
     if (this.isPostgres && this.pool) {
       try {
         const res = await this.pool.query(
@@ -719,36 +778,44 @@ class DatabaseManager {
              frequency = COALESCE($2, frequency),
              status = COALESCE($3, status),
              updated_at = NOW()
-           WHERE id = $4
+           WHERE id = $4 AND ($5::text IS NULL OR patient_id::text = $5)
            RETURNING *`,
-          [updates.instructions || null, updates.frequency || null, updates.status || null, id]
+          [updates.instructions || null, updates.frequency || null, updates.status || null, id, patientId]
         );
         if (res.rows.length > 0) return res.rows[0];
+        return null;
       } catch (err) {
         console.error('[Database] PostgreSQL updateMedication error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
       }
     }
 
-    const idx = this.memory.medications.findIndex(m => m.id === id);
+    const idx = this.memory.medications.findIndex(m =>
+      m.id === id && (!patientId || m.patientId === patientId || m.patient_id === patientId)
+    );
     if (idx === -1) return null;
     this.memory.medications[idx] = { ...this.memory.medications[idx], ...updates, updatedAt: new Date().toISOString() };
     this.saveDurableStore();
     return this.memory.medications[idx];
   }
 
-  async deleteMedication(id) {
+  async deleteMedication(id, patientId = null) {
     if (this.isPostgres && this.pool) {
       try {
-        await this.pool.query('DELETE FROM public.medications WHERE id = $1', [id]);
-        return true;
+        const result = await this.pool.query(
+          'DELETE FROM public.medications WHERE id = $1 AND ($2::text IS NULL OR patient_id::text = $2)',
+          [id, patientId]
+        );
+        return result.rowCount > 0;
       } catch (err) {
         console.error('[Database] PostgreSQL deleteMedication error:', err.message);
         if (process.env.NODE_ENV === 'production') throw err;
       }
     }
 
-    const idx = this.memory.medications.findIndex(m => m.id === id);
+    const idx = this.memory.medications.findIndex(m =>
+      m.id === id && (!patientId || m.patientId === patientId || m.patient_id === patientId)
+    );
     if (idx === -1) return false;
     this.memory.medications.splice(idx, 1);
     this.memory.schedules = this.memory.schedules.filter(s => s.medicationId !== id);
@@ -785,6 +852,23 @@ class DatabaseManager {
   }
 
   async saveSchedule(schData) {
+    if (!schData.patientId || !schData.medicationId) {
+      throw new Error('Patient and medication are required to create a dose schedule.');
+    }
+    if (this.isPostgres && this.pool) {
+      const owner = await this.pool.query(
+        'SELECT id FROM public.medications WHERE id = $1 AND patient_id::text = $2',
+        [schData.medicationId, String(schData.patientId)]
+      );
+      if (owner.rowCount === 0) throw new Error('Medication does not belong to this patient.');
+    } else {
+      const owner = this.memory.medications.find(m =>
+        m.id === schData.medicationId &&
+        String(m.patientId || m.patient_id) === String(schData.patientId)
+      );
+      if (!owner) throw new Error('Medication does not belong to this patient.');
+    }
+
     const id = schData.id || `sch-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
     const timeDisplay = schData.time || '08:00 AM';
     let scheduledTime;
@@ -809,6 +893,7 @@ class DatabaseManager {
              time_display = EXCLUDED.time_display,
              scheduled_dose = EXCLUDED.scheduled_dose,
              is_active = EXCLUDED.is_active
+           WHERE dose_schedules.patient_id = EXCLUDED.patient_id
            RETURNING *`,
           [
             id, schData.medicationId, schData.patientId,
@@ -818,6 +903,7 @@ class DatabaseManager {
             schData.scheduledDose || '1 Dose'
           ]
         );
+        if (!res.rows[0]) throw new Error('Schedule ID already belongs to another patient.');
         return res.rows[0];
       } catch (err) {
         console.error('[Database] PostgreSQL saveSchedule error:', err.message);
@@ -828,6 +914,9 @@ class DatabaseManager {
     const newSch = { ...schData, id, time: timeDisplay, createdAt: new Date().toISOString() };
     const idx = this.memory.schedules.findIndex(s => s.id === id);
     if (idx >= 0) {
+      if (this.memory.schedules[idx].patientId !== newSch.patientId) {
+        throw new Error('Schedule ID belongs to another patient.');
+      }
       this.memory.schedules[idx] = { ...this.memory.schedules[idx], ...newSch };
     } else {
       this.memory.schedules.push(newSch);
@@ -840,6 +929,46 @@ class DatabaseManager {
   // Dose Logs Operations
   // -------------------------------------------------------------
   async getDoseLogs(patientId, dateKey) {
+    if (this.isPostgres && this.pool) {
+      try {
+        const conditions = [];
+        const params = [];
+        if (patientId) {
+          params.push(patientId);
+          conditions.push(`d.patient_id = ${params.length}`);
+        }
+        if (dateKey) {
+          params.push(dateKey);
+          conditions.push(`d.scheduled_date = ${params.length}::date`);
+        }
+        const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+        const result = await this.pool.query(
+          `SELECT d.id, d.patient_id, d.medication_id, d.scheduled_date::text AS date_key,
+                  d.scheduled_timestamp, d.status, d.recorded_at, d.notes,
+                  s.time_display, s.time_slot_label
+           FROM public.dose_occurrences d
+           LEFT JOIN public.dose_schedules s ON s.id = d.schedule_id
+           ${where}
+           ORDER BY d.scheduled_timestamp DESC`,
+          params
+        );
+        return result.rows.map(row => ({
+          id: row.id,
+          patientId: row.patient_id,
+          medicationId: row.medication_id,
+          dateKey: row.date_key,
+          timeSlot: row.time_display || row.time_slot_label || '',
+          scheduledTime: row.scheduled_timestamp,
+          status: String(row.status || '').toLowerCase(),
+          recordedAt: row.recorded_at,
+          notes: row.notes
+        }));
+      } catch (err) {
+        console.error('[Database] PostgreSQL getDoseLogs error:', err.message);
+        if (process.env.NODE_ENV === 'production') throw err;
+      }
+    }
+
     return this.memory.doseLogs.filter(l => {
       if (patientId && l.patientId !== patientId) return false;
       if (dateKey && l.dateKey !== dateKey) return false;
@@ -848,6 +977,35 @@ class DatabaseManager {
   }
 
   async recordDoseLog({ patientId, medicationId, timeSlot, status, dateKey, scheduledTime }) {
+    if (!patientId || !medicationId) {
+      throw new Error('Patient and medication are required to record a dose.');
+    }
+    if (!['taken', 'skipped'].includes(String(status || '').toLowerCase())) {
+      throw new Error('Dose status must be either taken or skipped.');
+    }
+    if (typeof dateKey !== 'undefined' && dateKey !== null) {
+      if (typeof dateKey !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(dateKey)) {
+        throw new Error('Dose date must use YYYY-MM-DD format.');
+      }
+      const parsedDate = new Date(`${dateKey}T00:00:00.000Z`);
+      if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== dateKey) {
+        throw new Error('Dose date is not a valid calendar date.');
+      }
+    }
+    if (this.isPostgres && this.pool) {
+      const owner = await this.pool.query(
+        'SELECT id FROM public.medications WHERE id = $1 AND patient_id::text = $2',
+        [medicationId, String(patientId)]
+      );
+      if (owner.rowCount === 0) throw new Error('Medication does not belong to this patient.');
+    } else {
+      const owner = this.memory.medications.find(m =>
+        m.id === medicationId &&
+        String(m.patientId || m.patient_id) === String(patientId)
+      );
+      if (!owner) throw new Error('Medication does not belong to this patient.');
+    }
+
     const now = new Date();
     const todayDateKey = now.toISOString().split('T')[0];
     const targetDateKey = dateKey || todayDateKey;
@@ -893,16 +1051,43 @@ class DatabaseManager {
 
     if (this.isPostgres && this.pool) {
       try {
+        const rawTime = scheduledTime || timeSlot;
+        let requestedTime;
+        try {
+          requestedTime = normalizeTimeTo24Hour(rawTime);
+        } catch (timeError) {
+          const embeddedTime = String(rawTime || '').match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b/i)?.[0];
+          if (!embeddedTime) throw timeError;
+          requestedTime = normalizeTimeTo24Hour(embeddedTime);
+        }
+        const scheduleResult = await this.pool.query(
+          `SELECT id FROM public.dose_schedules
+           WHERE patient_id = $1 AND medication_id = $2
+             AND scheduled_time = $3::time AND is_active = true
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          [patientId, medicationId, requestedTime]
+        );
+        const schedule = scheduleResult.rows[0];
+        if (!schedule) {
+          throw new Error('No active dose schedule matches this medication, patient, and time.');
+        }
+
         await this.pool.query(
-          `INSERT INTO public.dose_occurrences 
-             (patient_id, medication_id, scheduled_date, scheduled_timestamp, status, recorded_at, notes)
-           VALUES 
-             ($1, $2, $3, NOW(), $4, NOW(), $5)
-           ON CONFLICT DO NOTHING`,
-          [patientId, medicationId, targetDateKey, status.toUpperCase(), `Recorded via ${status}`]
-        ).catch(() => {});
+          `INSERT INTO public.dose_occurrences
+             (schedule_id, medication_id, patient_id, scheduled_date, scheduled_timestamp, status, recorded_at, notes)
+           VALUES
+             ($1, $2, $3, $4::date, ($4::date + $5::time), $6, NOW(), $7)
+           ON CONFLICT (schedule_id, scheduled_date) DO UPDATE SET
+             scheduled_timestamp = EXCLUDED.scheduled_timestamp,
+             status = EXCLUDED.status,
+             recorded_at = NOW(),
+             notes = EXCLUDED.notes`,
+          [schedule.id, medicationId, patientId, targetDateKey, requestedTime, status.toUpperCase(), `Recorded via ${status}`]
+        );
       } catch (err) {
-        console.warn('[Database] PostgreSQL recordDoseLog warning:', err.message);
+        console.error('[Database] PostgreSQL recordDoseLog error:', err.message);
+        if (process.env.NODE_ENV === 'production') throw err;
       }
     }
 
@@ -1160,7 +1345,8 @@ class DatabaseManager {
 
   async saveFoodLog(logData) {
     const id = logData.id || `food-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-    const patientId = logData.patient_id || logData.patientId || 'USR-patient';
+    const patientId = logData.patient_id || logData.patientId;
+    if (!patientId) throw new Error('Patient ID is required to save a food log.');
     const foodName = logData.food_name || logData.name || 'Food Item';
     const quantity = Number(logData.quantity) || 1;
     const unit = logData.unit || 'serving';
@@ -1196,6 +1382,7 @@ class DatabaseManager {
             fibre_g = EXCLUDED.fibre_g,
             is_estimated = EXCLUDED.is_estimated,
             updated_at = NOW()
+          WHERE food_logs.patient_id = EXCLUDED.patient_id
           RETURNING *
         `;
         const res = await this.pool.query(query, [
@@ -1204,6 +1391,7 @@ class DatabaseManager {
           fibreG, isEstimated, source, notes
         ]);
         const r = res.rows[0];
+        if (!r) throw new Error('Food log ID already belongs to another patient.');
         return {
           id: r.id,
           patient_id: r.patient_id,
@@ -1251,6 +1439,9 @@ class DatabaseManager {
     };
     const existingIndex = this.memory.foodLogs.findIndex(l => l.id === id);
     if (existingIndex >= 0) {
+      if (String(this.memory.foodLogs[existingIndex].patient_id || this.memory.foodLogs[existingIndex].patientId) !== String(patientId)) {
+        throw new Error('Food log ID already belongs to another patient.');
+      }
       this.memory.foodLogs[existingIndex] = record;
     } else {
       this.memory.foodLogs.unshift(record);
@@ -1260,12 +1451,11 @@ class DatabaseManager {
   }
 
   async deleteFoodLog(id, patientId) {
+    if (!patientId) throw new Error('Patient ID is required to delete a food log.');
     if (this.isPostgres && this.pool) {
       try {
-        const query = patientId 
-          ? `DELETE FROM public.food_logs WHERE id = $1 AND patient_id = $2`
-          : `DELETE FROM public.food_logs WHERE id = $1`;
-        const res = await this.pool.query(query, patientId ? [id, patientId] : [id]);
+        const query = `DELETE FROM public.food_logs WHERE id = $1 AND patient_id::text = $2`;
+        const res = await this.pool.query(query, [id, String(patientId)]);
         return res.rowCount > 0;
       } catch (err) {
         console.error('[Database] PostgreSQL deleteFoodLog error:', err.message);
@@ -1276,7 +1466,7 @@ class DatabaseManager {
     if (!Array.isArray(this.memory.foodLogs)) this.memory.foodLogs = [];
     const before = this.memory.foodLogs.length;
     this.memory.foodLogs = this.memory.foodLogs.filter(
-      l => !(l.id === id && (!patientId || l.patient_id === patientId || l.patientId === patientId))
+      l => !(l.id === id && String(l.patient_id || l.patientId) === String(patientId))
     );
     this.saveDurableStore();
     return this.memory.foodLogs.length < before;

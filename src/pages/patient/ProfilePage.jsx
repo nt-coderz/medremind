@@ -34,6 +34,7 @@ import { formatShortUserId } from '../../utils/idGenerator';
 import { getUserInitials, getUserDisplayName } from '../../utils/greetingUtils';
 import { apiFetch } from '../../config/apiConfig';
 import { toast } from 'sonner';
+import { getAlarmPermissionStatus, openExactAlarmSettings, requestNotificationPermission } from '../../services/notificationService';
 
 const COMMON_ALLERGIES = [
   'Penicillin',
@@ -55,6 +56,8 @@ export default function ProfilePage() {
   const { currentUser, logout, scheduleDeletion, cancelDeletion, updateUserMedicalInfo } = useAuth();
   const [copied, setCopied] = useState(false);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
+  const [alarmStatus, setAlarmStatus] = useState({ display: 'unknown', exactAlarm: 'unknown' });
+  const [isUpdatingAlarmPermissions, setIsUpdatingAlarmPermissions] = useState(false);
 
   // Allergies & Medical Info State
   const [allergies, setAllergies] = useState(patientProfile?.allergies || []);
@@ -199,8 +202,38 @@ export default function ProfilePage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleToggle = (name) => {
-    toast.success(`Notification preference updated`);
+  const refreshAlarmStatus = async () => {
+    setAlarmStatus(await getAlarmPermissionStatus());
+  };
+
+  useEffect(() => {
+    refreshAlarmStatus();
+  }, []);
+
+  const handleEnableNotifications = async () => {
+    setIsUpdatingAlarmPermissions(true);
+    try {
+      const granted = await requestNotificationPermission();
+      await refreshAlarmStatus();
+      toast[granted ? 'success' : 'warning'](
+        granted ? 'Notification permission is enabled.' : 'Notification permission is still disabled.'
+      );
+    } finally {
+      setIsUpdatingAlarmPermissions(false);
+    }
+  };
+
+  const handleEnableExactAlarms = async () => {
+    setIsUpdatingAlarmPermissions(true);
+    try {
+      await openExactAlarmSettings();
+      await refreshAlarmStatus();
+      toast.info('Return here after changing Android Alarms & reminders access, then refresh the status.');
+    } catch (error) {
+      toast.error(error.message || 'Could not open exact-alarm settings.');
+    } finally {
+      setIsUpdatingAlarmPermissions(false);
+    }
   };
 
   const handleSignOut = () => {
@@ -660,21 +693,44 @@ export default function ProfilePage() {
         </Button>
       </Card>
 
-      {/* Notification Preferences */}
+      {/* Notification and Exact Alarm Permissions */}
       <Card className="space-y-3">
         <h3 className="font-bold text-xs uppercase tracking-wider text-[#202B28] flex items-center gap-1.5">
-          <Bell className="w-4 h-4 text-[#238B78]" /> Reminder Preferences
+          <Bell className="w-4 h-4 text-[#238B78]" /> Reminder Permissions
         </h3>
-
         <div className="space-y-2 text-xs">
-          <label className="flex items-center justify-between p-2 rounded-xl hover:bg-[#F8FAF8] cursor-pointer">
-            <span>Dose Notification Alerts</span>
-            <input type="checkbox" defaultChecked className="accent-[#238B78] w-4 h-4" onChange={() => handleToggle('notifications')} />
-          </label>
-          <label className="flex items-center justify-between p-2 rounded-xl hover:bg-[#F8FAF8] cursor-pointer">
-            <span>Alert Sound & Haptics</span>
-            <input type="checkbox" defaultChecked className="accent-[#238B78] w-4 h-4" onChange={() => handleToggle('sound')} />
-          </label>
+          <div className="flex items-center justify-between gap-3 p-2 rounded-xl bg-[#F8FAF8]">
+            <span>Notifications</span>
+            <Badge variant={alarmStatus.display === 'granted' ? 'success' : 'warning'}>
+              {alarmStatus.display}
+            </Badge>
+          </div>
+          {alarmStatus.display !== 'granted' && (
+            <Button size="sm" variant="outline" fullWidth disabled={isUpdatingAlarmPermissions} onClick={handleEnableNotifications}>
+              Enable Notifications
+            </Button>
+          )}
+          {alarmStatus.exactAlarm !== 'unsupported' && (
+            <>
+              <div className="flex items-center justify-between gap-3 p-2 rounded-xl bg-[#F8FAF8]">
+                <span>Android exact alarms</span>
+                <Badge variant={alarmStatus.exactAlarm === 'granted' ? 'success' : 'warning'}>
+                  {alarmStatus.exactAlarm}
+                </Badge>
+              </div>
+              {alarmStatus.exactAlarm !== 'granted' && (
+                <Button size="sm" variant="outline" fullWidth disabled={isUpdatingAlarmPermissions} onClick={handleEnableExactAlarms}>
+                  Enable Exact Alarms
+                </Button>
+              )}
+            </>
+          )}
+          <Button size="sm" variant="ghost" fullWidth disabled={isUpdatingAlarmPermissions} onClick={refreshAlarmStatus}>
+            Refresh Permission Status
+          </Button>
+          <p className="text-[10px] text-[#7A8782] leading-relaxed">
+            Exact-alarm access can be disabled in Android settings. Without it, reminders may be delivered later than scheduled. Keep notifications enabled and review battery restrictions on your device.
+          </p>
         </div>
       </Card>
 

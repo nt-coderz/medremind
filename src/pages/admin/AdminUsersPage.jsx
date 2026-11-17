@@ -16,7 +16,7 @@ import { apiFetch, isOnline } from '../../config/apiConfig';
 import { toast } from 'sonner';
 
 export default function AdminUsersPage() {
-  const { registeredUsers, updateUserStatus } = useAuth();
+  const { registeredUsers, updateUserStatus, refreshUsers } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('All');
   const [selectedUser, setSelectedUser] = useState(null);
@@ -41,9 +41,14 @@ export default function AdminUsersPage() {
     setTimeout(() => setCopiedId(''), 2000);
   };
 
-  const handleToggleStatus = (user) => {
+  const handleToggleStatus = async (user) => {
     const newStatus = user.status === 'Active' ? 'Suspended' : 'Active';
-    updateUserStatus(user.id, newStatus);
+    const result = await updateUserStatus(user.id, newStatus);
+    if (!result?.success) {
+      toast.error(result?.error || 'Could not update account status.');
+      return;
+    }
+    await refreshUsers();
     toast.success(`User ${user.name} status updated to ${newStatus}`);
     setSelectedUser(null);
   };
@@ -56,9 +61,9 @@ export default function AdminUsersPage() {
     }
     setIsProcessingDeletion(true);
     try {
-      if (isOnline()) {
-        const token = localStorage.getItem('medremind_auth_token');
-        const res = await apiFetch(`/admin/users/${user.id}/schedule-deletion`, {
+      if (!isOnline()) throw new Error('An internet connection is required for administrator account changes.');
+      const token = localStorage.getItem('medremind_auth_token');
+      const res = await apiFetch(`/admin/users/${user.id}/schedule-deletion`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -66,12 +71,11 @@ export default function AdminUsersPage() {
           },
           body: JSON.stringify({ reason: deletionReason || 'Admin scheduled account closure' })
         });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || 'Failed to schedule deletion on server');
-        }
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to schedule deletion on server');
       }
-      updateUserStatus(user.id, 'Pending_Deletion');
+      await refreshUsers();
       toast.warning(`Account for ${user.name} scheduled for deletion in 24 hours.`);
       setSelectedUser(null);
       setDeletionReason('');
@@ -86,21 +90,20 @@ export default function AdminUsersPage() {
   const handleCancelUserDeletion = async (user) => {
     setIsProcessingDeletion(true);
     try {
-      if (isOnline()) {
-        const token = localStorage.getItem('medremind_auth_token');
-        const res = await apiFetch(`/admin/users/${user.id}/cancel-deletion`, {
+      if (!isOnline()) throw new Error('An internet connection is required for administrator account changes.');
+      const token = localStorage.getItem('medremind_auth_token');
+      const res = await apiFetch(`/admin/users/${user.id}/cancel-deletion`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             ...(token ? { 'Authorization': `Bearer ${token}` } : {})
           }
         });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || 'Failed to cancel deletion on server');
-        }
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to cancel deletion on server');
       }
-      updateUserStatus(user.id, 'Active');
+      await refreshUsers();
       toast.success(`Scheduled deletion cancelled for ${user.name}. Account is Active.`);
       setSelectedUser(null);
     } catch (err) {

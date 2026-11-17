@@ -1,0 +1,89 @@
+name: Security validation
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keep only the newest validation run for a pull request. This prevents
+# outdated queued runs from consuming hosted-runner capacity after new commits.
+concurrency:
+  group: security-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+
+jobs:
+  backend-security-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install backend dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Run backend security regression tests
+        run: npm test
+
+  frontend-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Run ESLint
+        run: npm run lint
+      - name: Build frontend
+        run: npm run build
+
+  android-debug-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build web assets
+        run: npm run build
+      - name: Sync Capacitor Android project
+        run: npx cap sync android
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug
+      - name: Package tracked source tree
+        run: |
+          mkdir -p dist
+          git archive --format=zip --output=dist/MedRemind-source.zip HEAD
+      - name: Upload APK and source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: MedRemind-APK-and-source-ZIP
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            dist/MedRemind-source.zip
+          if-no-files-found: error
+          retention-days: 14

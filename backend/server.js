@@ -64,7 +64,7 @@ app.use(helmet({
 }));
 
 // Production CORS Configuration
-const allowedOrigins = [
+const defaultAllowedOrigins = [
   'capacitor://localhost',
   'https://localhost',
   'http://localhost',
@@ -73,15 +73,21 @@ const allowedOrigins = [
   'http://127.0.0.1:5173',
   'http://127.0.0.1:3000'
 ];
+const configuredOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+const allowedOrigins = new Set(
+  process.env.NODE_ENV === 'production'
+    ? configuredOrigins
+    : [...defaultAllowedOrigins, ...configuredOrigins]
+);
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Mobile apps and native requests lack origin header; allow them
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.onrender.com') || origin.endsWith('.railway.app') || origin.endsWith('.vercel.app')) {
-      return callback(null, true);
-    }
-    // Allow general cross-origin for mobile apps
-    return callback(null, true);
+    // Native Capacitor requests may not send an Origin header.
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    return callback(new Error('Origin is not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -105,40 +111,145 @@ const authLimiter = rateLimit({
 });
 app.use('/api/auth/', authLimiter);
 
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Authentication Middleware
+// Authentication middleware: requests without a token may reach public routes,
+// but a supplied malformed, invalid, or expired token is always rejected.
 function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return next();
-  const payload = verifyToken(token);
-  if (payload) {
-    req.user = payload;
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return next();
+  const match = /^Bearer\s+([^\s]+)$/i.exec(authHeader);
+  if (!match) {
+    return res.status(401).json({ success: false, error: 'Invalid authorization header' });
   }
+  const payload = verifyToken(match[1]);
+  if (!payload || !payload.id || !payload.role) {
+    return res.status(401).json({ success: false, error: 'Invalid or expired authentication token' });
+  }
+  req.user = payload;
   next();
 }
 app.use(authenticateToken);
 
-// Directories
+function requireAuth(req, res, next) {
+  if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
+  if (req.user.role !== 'admin') return res.status(403).json({ success: false, error: 'Administrator access required' });
+  next();
+}
+
+function requirePatientAccess(req, res, next) {
+  if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
+  if (req.user.role === 'admin') return next();
+  const requestedIds = [
+    req.params.patientId,
+    req.params.userId,
+    req.query.patientId,
+    req.body?.patientId,
+    req.body?.patient_id,
+    req.body?.userId,
+    req.body?.user_id
+  ].filter(value => value !== undefined && value !== null && value !== '');
+  if (requestedIds.some(id => String(id) !== String(req.user.id))) {
+    return res.status(403).json({ success: false, error: 'Access to another patient account is denied' });
+  }
+  next();
+}
+
+function requireSchedulerSecret(req, res, next) {
+  const configuredSecret = process.env.CRON_SECRET;
+  const suppliedSecret = req.headers['x-cron-secret'];
+  if (!configuredSecret || !suppliedSecret ||
+      Buffer.byteLength(configuredSecret) !== Buffer.byteLength(suppliedSecret) ||
+      !crypto.timingSafeEqual(Buffer.from(configuredSecret), Buffer.from(suppliedSecret))) {
+    return res.status(401).json({ success: false, error: 'Scheduler authentication required' });
+  }
+  next();
+}
+
+// Private health-document storage. Patient identifiers are hashed before use as
+// directory names; original filenames are never used as filesystem paths.
 const uploadsDir = path.join(__dirname, 'uploads');
 const dataDir = path.join(__dirname, 'data');
 
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true, mode: 0o700 });
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+try { fs.chmodSync(uploadsDir, 0o700); fs.chmodSync(dataDir, 0o700); } catch {}
 
-app.use('/uploads', express.static(uploadsDir));
+function getPatientUploadDir(patientId) {
+  if (!patientId) throw new Error('Authenticated patient ID is required for file storage.');
+  const patientKey = crypto.createHash('sha256').update(String(patientId)).digest('hex');
+  const directory = path.join(uploadsDir, patientKey);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(directory, 0o700); } catch {}
+  return directory;
+}
 
-// Multer Storage Configuration
+function createPrivateMediaUrl(patientId, filePath) {
+  const filename = path.basename(filePath);
+  const token = generateToken({ id: String(patientId), role: 'media', filename }, 1 / 6);
+  return `/api/media/${token}`;
+}
+
+function detectImageMime(buffer) {
+  if (!Buffer.isBuffer(buffer)) return null;
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
+// Short-lived signed image URLs allow native/browser image elements to load
+// previews without exposing the uploads directory or requiring custom headers.
+app.get('/api/media/:token', (req, res) => {
+  const media = verifyToken(req.params.token);
+  if (!media || media.role !== 'media' || !media.id ||
+      typeof media.filename !== 'string' ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,180}$/.test(media.filename)) {
+    return res.status(401).json({ success: false, error: 'Invalid or expired media link' });
+  }
+
+  const directory = getPatientUploadDir(media.id);
+  const filePath = path.resolve(directory, media.filename);
+  if (!filePath.startsWith(directory + path.sep) || !fs.existsSync(filePath)) {
+    return res.status(404).json({ success: false, error: 'File not found' });
+  }
+
+  res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  return res.sendFile(filePath);
+});
+
+// Multer Storage Configuration. Multer runs after authentication middleware.
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
+  destination: (req, file, cb) => {
+    try {
+      cb(null, getPatientUploadDir(req.user?.id));
+    } catch (error) {
+      cb(error);
+    }
+  },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.jpg';
-    cb(null, `rx-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, `rx-${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
   }
 });
-const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = multer({
+  storage,
+  limits: { fileSize: 15 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    if (!allowedTypes.has(file.mimetype)) {
+      return cb(new Error('Unsupported upload type. Please use a JPG, PNG, or WEBP image.'));
+    }
+    cb(null, true);
+  }
+});
 
 // JSON Store Helpers
 function getStore(filename, defaultVal = []) {
@@ -180,20 +291,8 @@ function logAudit(action, actorId, details, entityName = null, entityId = null) 
 
 // Lookup verified registered user
 async function getRegisteredUser(patientId) {
-  let user = (await db.findUserById(patientId)) || (await db.findUserByEmailOrId(patientId));
-  if (!user && (patientId === 'patient-alex' || patientId === 'patient-default')) {
-    user = await db.findUserById('USR-e87f3b14-9a2c-4d5e-88f1-209471ab5e82');
-  }
-  if (!user) {
-    const allUsers = await db.listUsers();
-    if (allUsers.length > 0) user = allUsers[0];
-  }
-  return user || {
-    id: patientId || 'USR-patient',
-    name: 'Patient',
-    email: 'patient@medremind.app',
-    role: 'patient'
-  };
+  if (!patientId) return null;
+  return (await db.findUserById(patientId)) || (await db.findUserByEmailOrId(patientId)) || null;
 }
 
 // Health check with database, environment, and uptime reporting
@@ -384,6 +483,10 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Email address is required.' });
     }
     const cleanEmail = email.trim().toLowerCase();
+    const configuredAdminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    if (configuredAdminEmail && cleanEmail === configuredAdminEmail) {
+      return res.status(403).json({ success: false, error: 'This email address is reserved for the administrator account.' });
+    }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(cleanEmail)) {
       return res.status(400).json({ success: false, error: 'Please enter a valid email address.' });
@@ -395,8 +498,8 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     const cleanPwd = (password || '').trim();
-    if (cleanPwd.length < 6) {
-      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long.' });
+    if (cleanPwd.length < 8) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 8 characters long.' });
     }
 
     if (role === 'admin' || role?.toLowerCase() === 'administrator') {
@@ -432,10 +535,7 @@ app.post('/api/auth/register', async (req, res) => {
     });
 
     await db.logAudit('USER_REGISTRATION', newUser.id, {
-      name: newUser.name,
-      role: newUser.role,
-      email: newUser.email,
-      phone: rawPhone
+      role: newUser.role
     });
 
     return res.status(201).json({
@@ -483,7 +583,9 @@ app.post('/api/auth/resend-otp', otpLimiter, async (req, res) => {
 
 /**
  * POST /api/auth/login
- * Authenticates Admin (ADMIN/123456) or Patient credentials (Email/Phone + Password).
+ * Authenticates configured administrator credentials or patient credentials.
+ * Admin credentials are provisioned out-of-band using ADMIN_EMAIL and
+ * ADMIN_PASSWORD_HASH (PBKDF2 format generated by hashPassword).
  */
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -495,25 +597,26 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Identifier and password are required.' });
     }
 
-    // 1. Strict Administrator Authentication
-    if (cleanId.toUpperCase() === 'ADMIN') {
-      if (cleanPwd === '123456') {
-        const adminUser = {
-          id: "USR-00000000-0000-4000-8000-000000000001",
-          name: "System Administrator",
-          email: "admin@medremind.internal",
-          role: "admin",
-          status: "Active"
-        };
-        const token = generateToken(adminUser);
-        await db.logAudit('ADMIN_LOGIN', adminUser.id, 'Successful administrator portal login');
-        return res.json({ success: true, user: adminUser, token });
-      } else {
-        return res.status(401).json({ success: false, error: 'Invalid administrator credentials. Access denied.' });
+    // Administrator credentials are never hardcoded or accepted from public registration.
+    const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH || '';
+    if (adminEmail && cleanId.toLowerCase() === adminEmail) {
+      if (!adminPasswordHash || !verifyPassword(cleanPwd, adminPasswordHash)) {
+        return res.status(401).json({ success: false, error: 'Invalid administrator credentials.' });
       }
+      const adminUser = {
+        id: process.env.ADMIN_USER_ID || 'configured-admin',
+        name: process.env.ADMIN_NAME || 'System Administrator',
+        email: adminEmail,
+        role: 'admin',
+        status: 'Active'
+      };
+      const token = generateToken(adminUser);
+      await db.logAudit('ADMIN_LOGIN', adminUser.id, 'Successful administrator portal login');
+      return res.json({ success: true, user: adminUser, token });
     }
 
-    // 2. Patient Authentication (by Email, Phone Number, or User ID)
+    // Patient Authentication (by Email, Phone Number, or User ID)
     const user = await db.findUserByEmailOrId(cleanId);
     if (!user || user.role === 'admin') {
       return res.status(401).json({ success: false, error: 'Invalid credentials. Please verify your Email/Phone number and password.' });
@@ -572,6 +675,22 @@ app.get('/api/auth/me', async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, error: 'Unauthenticated' });
   }
+  if (
+    req.user.role === 'admin' &&
+    req.user.email &&
+    req.user.email.toLowerCase() === (process.env.ADMIN_EMAIL || '').trim().toLowerCase()
+  ) {
+    return res.json({
+      success: true,
+      user: {
+        id: req.user.id,
+        name: req.user.name || process.env.ADMIN_NAME || 'System Administrator',
+        email: req.user.email,
+        role: 'admin',
+        status: 'Active'
+      }
+    });
+  }
   const user = await db.findUserById(req.user.id);
   if (!user) {
     return res.status(404).json({ success: false, error: 'User record not found' });
@@ -584,7 +703,7 @@ app.get('/api/auth/me', async (req, res) => {
  * GET /api/profile/medical
  * Retrieves patient allergies and medical health profile
  */
-app.get('/api/profile/medical', async (req, res) => {
+app.get('/api/profile/medical', requirePatientAccess, async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, error: 'Authentication required' });
   }
@@ -603,7 +722,7 @@ app.get('/api/profile/medical', async (req, res) => {
  * PUT /api/profile/medical
  * Updates patient allergies and medical health profile (sanitized & length-capped)
  */
-app.put('/api/profile/medical', async (req, res) => {
+app.put('/api/profile/medical', requirePatientAccess, async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, error: 'Authentication required' });
   }
@@ -636,6 +755,7 @@ app.put('/api/profile/medical', async (req, res) => {
       allergies: cleanAllergies,
       medicalInfo: cleanMedInfo
     });
+    if (!updated) return res.status(404).json({ success: false, error: 'User profile not found.' });
 
     res.json({ success: true, ...updated });
   } catch (err) {
@@ -647,7 +767,7 @@ app.put('/api/profile/medical', async (req, res) => {
  * GET /api/users
  * Returns list of registered users
  */
-app.get('/api/users', async (req, res) => {
+app.get('/api/users', requireAdmin, async (req, res) => {
   const users = await db.listUsers();
   res.json({ success: true, users });
 });
@@ -656,7 +776,7 @@ app.get('/api/users', async (req, res) => {
  * PUT /api/users/:id/status
  * Updates user account status (e.g. Active, Suspended)
  */
-app.put('/api/users/:id/status', async (req, res) => {
+app.put('/api/users/:id/status', requireAdmin, async (req, res) => {
   const { status } = req.body;
   if (!status) return res.status(400).json({ error: 'Status is required' });
   const updated = await db.updateUserStatus(req.params.id, status);
@@ -680,6 +800,7 @@ app.post('/api/auth/schedule-deletion', async (req, res) => {
     }
     const reason = req.body.reason || 'User initiated account deletion';
     const updatedUser = await db.scheduleUserDeletion(req.user.id, req.user.id, reason);
+    if (!updatedUser) return res.status(404).json({ success: false, error: 'User account not found.' });
 
     // Record system notification for user
     const notifMsg = `Your MedRemind account has been scheduled for permanent deletion in 24 hours. You can cancel this request at any time before the period expires.`;
@@ -710,6 +831,7 @@ app.post('/api/auth/cancel-deletion', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Authentication required' });
     }
     const updatedUser = await db.cancelUserDeletion(req.user.id, req.user.id);
+    if (!updatedUser) return res.status(404).json({ success: false, error: 'User account not found.' });
 
     await db.saveNotification({
       recipientId: req.user.id,
@@ -732,7 +854,7 @@ app.post('/api/auth/cancel-deletion', async (req, res) => {
  * POST /api/admin/users/:userId/schedule-deletion
  * Administrator schedules deletion for a user account with 24-hour grace period.
  */
-app.post('/api/admin/users/:userId/schedule-deletion', async (req, res) => {
+app.post('/api/admin/users/:userId/schedule-deletion', requireAdmin, async (req, res) => {
   try {
     const adminId = req.user?.id || 'admin';
     const targetUserId = req.params.userId;
@@ -752,6 +874,7 @@ app.post('/api/admin/users/:userId/schedule-deletion', async (req, res) => {
 
     const reason = req.body.reason || 'Administrator scheduled account deletion';
     const updatedUser = await db.scheduleUserDeletion(targetUserId, adminId, reason);
+    if (!updatedUser) return res.status(404).json({ success: false, error: 'Target user not found.' });
 
     await db.saveNotification({
       recipientId: targetUserId,
@@ -774,7 +897,7 @@ app.post('/api/admin/users/:userId/schedule-deletion', async (req, res) => {
  * POST /api/admin/users/:userId/cancel-deletion
  * Administrator cancels a pending account deletion.
  */
-app.post('/api/admin/users/:userId/cancel-deletion', async (req, res) => {
+app.post('/api/admin/users/:userId/cancel-deletion', requireAdmin, async (req, res) => {
   try {
     const adminId = req.user?.id || 'admin';
     const targetUserId = req.params.userId;
@@ -785,6 +908,7 @@ app.post('/api/admin/users/:userId/cancel-deletion', async (req, res) => {
     }
 
     const updatedUser = await db.cancelUserDeletion(targetUserId, adminId);
+    if (!updatedUser) return res.status(404).json({ success: false, error: 'Target user not found.' });
 
     await db.saveNotification({
       recipientId: targetUserId,
@@ -804,7 +928,7 @@ app.post('/api/admin/users/:userId/cancel-deletion', async (req, res) => {
 });
 
 // Periodic background worker: executes expired scheduled deletions (24-hour grace window)
-setInterval(async () => {
+const accountDeletionWorker = setInterval(async () => {
   try {
     const deleted = await db.executeScheduledDeletions();
     if (deleted && deleted.length > 0) {
@@ -814,6 +938,8 @@ setInterval(async () => {
     console.error('[Account Deletion Worker] Error during scheduled deletion run:', err.message);
   }
 }, 60000);
+// Do not keep test processes or one-off scripts alive solely for this background worker.
+accountDeletionWorker.unref();
 
 // -------------------------------------------------------------
 // Medication & Routine Management Endpoints
@@ -823,7 +949,7 @@ setInterval(async () => {
  * GET /api/medications
  * Returns medications for a specific patient
  */
-app.get('/api/medications', async (req, res) => {
+app.get('/api/medications', requirePatientAccess, async (req, res) => {
   const patientId = req.query.patientId || req.user?.id;
   const medications = await db.getMedications(patientId);
   res.json({ success: true, medications });
@@ -833,10 +959,10 @@ app.get('/api/medications', async (req, res) => {
  * POST /api/medications
  * Adds or saves a medication
  */
-app.post('/api/medications', async (req, res) => {
+app.post('/api/medications', requirePatientAccess, async (req, res) => {
   try {
-    const med = await db.saveMedication(req.body);
-    await db.logAudit('MEDICATION_CREATED', req.body.patientId || req.user?.id, { medicationId: med.id, name: med.name });
+    const med = await db.saveMedication({ ...req.body, patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id });
+    await db.logAudit('MEDICATION_CREATED', req.user.id, { patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id, medicationId: med.id });
     res.status(201).json({ success: true, medication: med });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
@@ -847,8 +973,8 @@ app.post('/api/medications', async (req, res) => {
  * PUT /api/medications/:id
  * Updates an existing medication
  */
-app.put('/api/medications/:id', async (req, res) => {
-  const updated = await db.updateMedication(req.params.id, req.body);
+app.put('/api/medications/:id', requirePatientAccess, async (req, res) => {
+  const updated = await db.updateMedication(req.params.id, req.body, req.user.role === 'admin' ? null : req.user.id);
   if (!updated) return res.status(404).json({ success: false, error: 'Medication not found' });
   res.json({ success: true, medication: updated });
 });
@@ -857,9 +983,9 @@ app.put('/api/medications/:id', async (req, res) => {
  * GET /api/food-logs
  * Retrieves food logs for a patient on a specific date (defaults to today)
  */
-app.get('/api/food-logs', async (req, res) => {
+app.get('/api/food-logs', requirePatientAccess, async (req, res) => {
   try {
-    const patientId = req.query.patientId || req.user?.id || 'USR-patient';
+    const patientId = req.user.role === 'admin' ? (req.query.patientId || req.user.id) : req.user.id;
     const date = req.query.date || new Date().toISOString().split('T')[0];
     const logs = await db.getFoodLogs(patientId, date);
     res.json({ success: true, logs });
@@ -872,11 +998,11 @@ app.get('/api/food-logs', async (req, res) => {
  * POST /api/food-logs
  * Adds a new food log entry
  */
-app.post('/api/food-logs', async (req, res) => {
+app.post('/api/food-logs', requirePatientAccess, async (req, res) => {
   try {
-    const patientId = req.body.patient_id || req.body.patientId || req.user?.id || 'USR-patient';
+    const patientId = req.user.role === 'admin' ? (req.body.patient_id || req.body.patientId || req.user.id) : req.user.id;
     const log = await db.saveFoodLog({ ...req.body, patient_id: patientId });
-    await db.logAudit('FOOD_LOG_CREATED', patientId, { logId: log.id, foodName: log.food_name, calories: log.calories });
+    await db.logAudit('FOOD_LOG_CREATED', req.user.id, { patientId, logId: log.id });
     res.status(201).json({ success: true, log });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
@@ -887,14 +1013,14 @@ app.post('/api/food-logs', async (req, res) => {
  * DELETE /api/food-logs/:id
  * Removes a food log entry
  */
-app.delete('/api/food-logs/:id', async (req, res) => {
+app.delete('/api/food-logs/:id', requirePatientAccess, async (req, res) => {
   try {
-    const patientId = req.query.patientId || req.user?.id || 'USR-patient';
+    const patientId = req.user.role === 'admin' ? (req.query.patientId || req.user.id) : req.user.id;
     const success = await db.deleteFoodLog(req.params.id, patientId);
     if (!success) {
       return res.status(404).json({ success: false, error: 'Food log not found' });
     }
-    await db.logAudit('FOOD_LOG_DELETED', patientId, { logId: req.params.id });
+    await db.logAudit('FOOD_LOG_DELETED', req.user.id, { patientId, logId: req.params.id });
     res.json({ success: true, deleted: true });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -943,9 +1069,9 @@ app.get('/api/food-lookup', async (req, res) => {
  * GET /api/nutrition-targets
  * Gets patient's nutritional targets
  */
-app.get('/api/nutrition-targets', async (req, res) => {
+app.get('/api/nutrition-targets', requirePatientAccess, async (req, res) => {
   try {
-    const patientId = req.query.patientId || req.user?.id || 'USR-patient';
+    const patientId = req.user.role === 'admin' ? (req.query.patientId || req.user.id) : req.user.id;
     const targets = await db.getNutritionTargets(patientId);
     res.json({ success: true, targets });
   } catch (err) {
@@ -957,9 +1083,9 @@ app.get('/api/nutrition-targets', async (req, res) => {
  * PUT /api/nutrition-targets
  * Updates patient's nutritional targets
  */
-app.put('/api/nutrition-targets', async (req, res) => {
+app.put('/api/nutrition-targets', requirePatientAccess, async (req, res) => {
   try {
-    const patientId = req.body.patientId || req.user?.id || 'USR-patient';
+    const patientId = req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id;
     const targets = req.body.targets || req.body;
     const saved = await db.saveNutritionTargets(patientId, targets);
     res.json({ success: true, targets: saved });
@@ -972,8 +1098,8 @@ app.put('/api/nutrition-targets', async (req, res) => {
  * DELETE /api/medications/:id
  * Deletes a medication and associated dose schedules
  */
-app.delete('/api/medications/:id', async (req, res) => {
-  const success = await db.deleteMedication(req.params.id);
+app.delete('/api/medications/:id', requirePatientAccess, async (req, res) => {
+  const success = await db.deleteMedication(req.params.id, req.user.role === 'admin' ? null : req.user.id);
   if (!success) return res.status(404).json({ success: false, error: 'Medication not found' });
   res.json({ success: true, message: 'Medication deleted' });
 });
@@ -982,7 +1108,7 @@ app.delete('/api/medications/:id', async (req, res) => {
  * GET /api/schedules
  * Returns active dose schedules for a patient
  */
-app.get('/api/schedules', async (req, res) => {
+app.get('/api/schedules', requirePatientAccess, async (req, res) => {
   const patientId = req.query.patientId || req.user?.id;
   const schedules = await db.getSchedules(patientId);
   res.json({ success: true, schedules });
@@ -992,8 +1118,8 @@ app.get('/api/schedules', async (req, res) => {
  * POST /api/schedules
  * Creates or updates a dose schedule
  */
-app.post('/api/schedules', async (req, res) => {
-  const sch = await db.saveSchedule(req.body);
+app.post('/api/schedules', requirePatientAccess, async (req, res) => {
+  const sch = await db.saveSchedule({ ...req.body, patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id });
   res.status(201).json({ success: true, schedule: sch });
 });
 
@@ -1001,22 +1127,27 @@ app.post('/api/schedules', async (req, res) => {
  * GET /api/dose-logs
  * Retrieves adherence logs for a patient
  */
-app.get('/api/dose-logs', (req, res) => {
-  const patientId = req.query.patientId || req.user?.id;
-  const date = req.query.date;
-  const logs = db.getDoseLogs(patientId, date);
-  res.json({ success: true, logs });
+app.get('/api/dose-logs', requirePatientAccess, async (req, res) => {
+  try {
+    const patientId = req.query.patientId || req.user?.id;
+    const date = req.query.date;
+    const logs = await db.getDoseLogs(patientId, date);
+    res.json({ success: true, logs });
+  } catch (err) {
+    console.error('[Dose Logs] Failed to retrieve logs:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to retrieve dose logs.' });
+  }
 });
 
 /**
  * POST /api/dose-logs
  * Records a dose taken or skipped
  */
-app.post('/api/dose-logs', async (req, res) => {
+app.post('/api/dose-logs', requirePatientAccess, async (req, res) => {
   try {
     const log = await db.recordDoseLog({
       ...req.body,
-      patientId: req.body.patientId || req.user?.id
+      patientId: req.user.role === 'admin' ? (req.body.patientId || req.user.id) : req.user.id
     });
     res.status(201).json({ success: true, log });
   } catch (err) {
@@ -1032,7 +1163,7 @@ app.post('/api/dose-logs', async (req, res) => {
  * GET /api/consents/:userId
  * Retrieves active statutory consent record
  */
-app.get('/api/consents/:userId', async (req, res) => {
+app.get('/api/consents/:userId', requirePatientAccess, async (req, res) => {
   const consent = await db.getConsent(req.params.userId);
   res.json({ success: true, consent });
 });
@@ -1041,9 +1172,9 @@ app.get('/api/consents/:userId', async (req, res) => {
  * POST /api/consents
  * Records statutory consent for DPDP Act, 2023
  */
-app.post('/api/consents', async (req, res) => {
+app.post('/api/consents', requirePatientAccess, async (req, res) => {
   try {
-    const consent = await db.saveConsent(req.body);
+    const consent = await db.saveConsent({ ...req.body, userId: req.user.role === 'admin' ? (req.body.userId || req.user.id) : req.user.id });
     await db.logAudit('STATUTORY_CONSENT_RECORDED', req.body.userId, {
       consentId: consent.id,
       versions: consent.documentVersions
@@ -1058,11 +1189,12 @@ app.post('/api/consents', async (req, res) => {
  * POST /api/consents/revoke
  * Revokes statutory consent
  */
-app.post('/api/consents/revoke', async (req, res) => {
-  const { userId, reason } = req.body;
+app.post('/api/consents/revoke', requirePatientAccess, async (req, res) => {
+  const { reason } = req.body;
+  const userId = req.user.role === 'admin' ? (req.body.userId || req.user.id) : req.user.id;
   if (!userId) return res.status(400).json({ error: 'User ID required' });
   const success = await db.revokeConsent(userId, reason);
-  await db.logAudit('STATUTORY_CONSENT_REVOKED', userId, { reason });
+  await db.logAudit('STATUTORY_CONSENT_REVOKED', req.user.id, { subjectUserId: userId, reason });
   res.json({ success, message: success ? 'Consent revoked successfully' : 'No active consent found' });
 });
 
@@ -1070,15 +1202,25 @@ app.post('/api/consents/revoke', async (req, res) => {
  * POST /api/admin/backup
  * Triggers full JSON database snapshot
  */
-app.post('/api/admin/backup', (req, res) => {
-  const backup = db.createBackup();
-  res.json(backup);
+app.post('/api/admin/backup', requireAdmin, async (req, res) => {
+  try {
+    const backup = await db.createBackup();
+    res.json(backup);
+  } catch (err) {
+    console.error('[Admin Backup] Failed to create database snapshot:', err.message);
+    res.status(500).json({ success: false, error: 'Unable to create a complete database backup.' });
+  }
 });
 
 // User Lookup endpoint (Legacy compatibility)
-app.get('/api/users/:patientId', async (req, res) => {
+app.get('/api/users/:patientId', requireAuth, async (req, res) => {
+  if (req.user.role !== 'admin' && req.user.id !== req.params.patientId) {
+    return res.status(403).json({ success: false, error: 'Access denied' });
+  }
   const user = await getRegisteredUser(req.params.patientId);
-  res.json({ success: true, user });
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+  const { passwordHash, ...safeUser } = user;
+  res.json({ success: true, user: safeUser });
 });
 
 // Strip OCR parsing fallback
@@ -1158,7 +1300,7 @@ function parseStripOcrBackend(rawText) {
  * Analyzes medicine strips, blister packs, and boxes.
  * Supports online (Gemini primary) and offline (Tesseract fallback).
  */
-app.post('/api/scan-strip', upload.single('stripImage'), async (req, res) => {
+app.post('/api/scan-strip', requireAuth, upload.single('stripImage'), async (req, res) => {
   try {
     let fileBuffer = null;
     let filePath = null;
@@ -1173,10 +1315,16 @@ app.post('/api/scan-strip', upload.single('stripImage'), async (req, res) => {
       const b64 = matches && matches.length === 3 ? matches[2] : rawB64;
       fileBuffer = Buffer.from(b64, 'base64');
       const filename = `strip-${Date.now()}-${Math.round(Math.random() * 1e9)}.jpg`;
-      filePath = path.join(uploadsDir, filename);
+      filePath = path.join(getPatientUploadDir(req.user.id), filename);
       fs.writeFileSync(filePath, fileBuffer);
     } else {
       return res.status(400).json({ error: 'No medicine strip image provided' });
+    }
+
+    const imageMime = detectImageMime(fileBuffer);
+    if (!imageMime) {
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(415).json({ success: false, error: 'Unsupported or invalid image content. Use a valid JPG, PNG, or WEBP image.' });
     }
 
     const sha256 = computeSHA256(fileBuffer);
@@ -1186,7 +1334,7 @@ app.post('/api/scan-strip', upload.single('stripImage'), async (req, res) => {
 
     if (mode === 'online') {
       try {
-        stripData = await analyzeStripWithGemini(fileBuffer, 'image/jpeg');
+        stripData = await analyzeStripWithGemini(fileBuffer, imageMime);
         engineUsed = 'GEMINI';
       } catch (err) {
         console.warn('[Scan Strip] Gemini technical fallback:', err.message);
@@ -1205,7 +1353,7 @@ app.post('/api/scan-strip', upload.single('stripImage'), async (req, res) => {
     return res.json({
       success: true,
       scanId: `strip-${Date.now()}`,
-      imageUrl: filePath ? `/uploads/${path.basename(filePath)}` : null,
+      imageUrl: filePath ? createPrivateMediaUrl(req.user.id, filePath) : null,
       sha256,
       engine: engineUsed,
       isFallback,
@@ -1230,7 +1378,7 @@ const chatLimiter = rateLimit({
  * Conversational Medi assistant powered by Gemini with multi-model fallback.
  * Protected by JWT auth, rate limited.
  */
-app.post('/api/chat', chatLimiter, async (req, res) => {
+app.post('/api/chat', requireAuth, chatLimiter, async (req, res) => {
   const { message, history } = req.body;
   if (!message || typeof message !== 'string' || message.trim() === '') {
     return res.status(400).json({ success: false, error: 'Message cannot be empty.' });
@@ -1356,15 +1504,21 @@ Keep your tone friendly, warm, empathetic, and concise. Format responses with cl
  * Supports Online (Gemini primary) and Offline (Tesseract) scanning modes.
  * Intelligent Brand vs Generic resolution & duplicate prevention.
  */
-app.post('/api/scan-prescriptions', async (req, res) => {
+app.post('/api/scan-prescriptions', requirePatientAccess, async (req, res) => {
   try {
-    const { files, patientId, mode = 'online' } = req.body;
+    const { files, mode = 'online' } = req.body;
+    const patientId = req.user.role === 'admin' ? req.body.patientId : req.user.id;
+    if (!patientId) return res.status(400).json({ success: false, error: 'Patient ID is required for administrator scans' });
     if (!files || !Array.isArray(files) || files.length === 0) {
       return res.status(400).json({ error: 'No files provided for batch prescription scan' });
+    }
+    if (files.length > 5) {
+      return res.status(413).json({ success: false, error: 'A batch can contain at most 5 prescription documents.' });
     }
 
     // 1. Retrieve registered patient identity from authenticated database
     const registeredUser = await getRegisteredUser(patientId);
+    if (!registeredUser) return res.status(404).json({ success: false, error: 'Patient account not found' });
     const registeredPatientName = registeredUser.name;
     const batchId = `batch-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
@@ -1374,7 +1528,7 @@ app.post('/api/scan-prescriptions', async (req, res) => {
       m => m.patientId === registeredUser.id && (m.status === 'Active' || m.status === 'ACTIVE')
     );
 
-    console.log(`[Batch Scan] Mode: ${mode.toUpperCase()} | Processing ${files.length} file(s) for patient ${registeredPatientName} (${registeredUser.id})`);
+    console.log(`[Batch Scan] Mode: ${mode.toUpperCase()} | Processing ${files.length} file(s).`);
 
     const processedDocuments = [];
     const existingPrescriptions = getStore('prescriptions.json', []);
@@ -1395,17 +1549,35 @@ app.post('/api/scan-prescriptions', async (req, res) => {
       }
 
       // Decode file buffer
-      if (!fileItem.dataBase64 || fileItem.dataBase64.trim().length === 0) {
+      if (typeof fileItem.dataBase64 !== 'string' || fileItem.dataBase64.trim().length === 0) {
         return res.status(400).json({ error: `File "${fileName}" appears empty or corrupted.` });
       }
 
       let fileBuffer = null;
       const matches = fileItem.dataBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-      const b64 = matches && matches.length === 3 ? matches[2] : fileItem.dataBase64;
+      const b64 = (matches && matches.length === 3 ? matches[2] : fileItem.dataBase64).replace(/\\s/g, '');
+      const maxFileBytes = 7 * 1024 * 1024;
+      const maxBase64Chars = Math.ceil(maxFileBytes * 4 / 3) + 4;
+      if (b64.length > maxBase64Chars ||
+          !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(b64)) {
+        return res.status(413).json({ success: false, error: `File "${fileName}" is too large or has invalid base64 encoding.` });
+      }
       fileBuffer = Buffer.from(b64, 'base64');
 
-      if (fileBuffer.length === 0) {
-        return res.status(400).json({ error: `File "${fileName}" appears empty or corrupted.` });
+      if (fileBuffer.length === 0 || fileBuffer.length > maxFileBytes) {
+        return res.status(413).json({ success: false, error: `File "${fileName}" is empty or exceeds the 7 MB limit.` });
+      }
+
+      const isPdf = fileExt === 'pdf';
+      const imageMime = detectImageMime(fileBuffer);
+      if (isPdf ? fileBuffer.toString('ascii', 0, 5) !== '%PDF-' : !imageMime) {
+        return res.status(415).json({ success: false, error: `File "${fileName}" does not contain a valid supported document.` });
+      }
+      const extensionMatches = isPdf ||
+        (['jpg', 'jpeg'].includes(fileExt) && imageMime === 'image/jpeg') ||
+        (fileExt === 'png' && imageMime === 'image/png');
+      if (!extensionMatches) {
+        return res.status(415).json({ success: false, error: `File "${fileName}" extension does not match its actual content.` });
       }
 
       // Compute SHA-256
@@ -1418,7 +1590,8 @@ app.post('/api/scan-prescriptions', async (req, res) => {
 
       const docId = `doc-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 6)}`;
       const savedFileName = `${docId}.${fileExt}`;
-      const savedFilePath = path.join(uploadsDir, savedFileName);
+      const patientUploadDir = getPatientUploadDir(patientId);
+      const savedFilePath = path.join(patientUploadDir, savedFileName);
       fs.writeFileSync(savedFilePath, fileBuffer);
 
       let docResult = null;
@@ -1427,7 +1600,15 @@ app.post('/api/scan-prescriptions', async (req, res) => {
         // --- PDF Multi-Page Pipeline ---
         console.log(`[Batch Scan] Processing PDF document: ${fileName}...`);
         const pageCount = getPdfPageCount(savedFilePath);
-        const extractedPages = extractPdfPagesToImages(savedFilePath, uploadsDir, `pdf-${docId}`);
+        if (!Number.isInteger(pageCount) || pageCount < 1 || pageCount > 20) {
+          fs.unlinkSync(savedFilePath);
+          return res.status(413).json({ success: false, error: `PDF "${fileName}" must contain between 1 and 20 pages.` });
+        }
+        const extractedPages = extractPdfPagesToImages(savedFilePath, patientUploadDir, `pdf-${docId}`);
+        if (!Array.isArray(extractedPages) || extractedPages.length !== pageCount) {
+          throw new Error(`PDF page extraction failed or returned an unexpected page count for "${fileName}".`);
+        }
+        extractedPages.forEach(page => { page.imageUrl = createPrivateMediaUrl(patientId, page.imagePath); });
         const digitalText = extractPdfDigitalText(savedFilePath);
 
         let pdfGeminiSuccess = false;
@@ -1490,7 +1671,7 @@ app.post('/api/scan-prescriptions', async (req, res) => {
               format: 'PDF',
               pageCount,
               pages: pageResults,
-              imageUrl: pageResults[0]?.imageUrl || `/uploads/${savedFileName}`,
+              imageUrl: pageResults[0]?.imageUrl || createPrivateMediaUrl(patientId, savedFilePath),
               sha256,
               isDuplicate,
               engine: 'GEMINI',
@@ -1577,7 +1758,7 @@ app.post('/api/scan-prescriptions', async (req, res) => {
             format: 'PDF',
             pageCount,
             pages: pageResults,
-            imageUrl: pageResults[0]?.imageUrl || `/uploads/${savedFileName}`,
+            imageUrl: pageResults[0]?.imageUrl || createPrivateMediaUrl(patientId, savedFilePath),
             sha256,
             isDuplicate,
             engine: 'TESSERACT',
@@ -1656,8 +1837,8 @@ app.post('/api/scan-prescriptions', async (req, res) => {
             fileType: `image/${fileExt === 'jpg' ? 'jpeg' : fileExt}`,
             format: 'IMAGE',
             pageCount: 1,
-            pages: [{ pageNumber: 1, imageUrl: `/uploads/${savedFileName}`, medicinesCount: evaluatedMedicines.length }],
-            imageUrl: `/uploads/${savedFileName}`,
+            pages: [{ pageNumber: 1, imageUrl: createPrivateMediaUrl(patientId, savedFilePath), medicinesCount: evaluatedMedicines.length }],
+            imageUrl: createPrivateMediaUrl(patientId, savedFilePath),
             sha256,
             isDuplicate,
             engine: 'GEMINI',
@@ -1707,8 +1888,8 @@ app.post('/api/scan-prescriptions', async (req, res) => {
             fileType: `image/${fileExt === 'jpg' ? 'jpeg' : fileExt}`,
             format: format || 'IMAGE',
             pageCount: 1,
-            pages: [{ pageNumber: 1, imageUrl: `/uploads/${savedFileName}`, rawText: ocrResult.rawText, medicinesCount: evaluatedMedicines.length }],
-            imageUrl: `/uploads/${savedFileName}`,
+            pages: [{ pageNumber: 1, imageUrl: createPrivateMediaUrl(patientId, savedFilePath), rawText: ocrResult.rawText, medicinesCount: evaluatedMedicines.length }],
+            imageUrl: createPrivateMediaUrl(patientId, savedFilePath),
             sha256,
             isDuplicate,
             engine: 'TESSERACT',
@@ -1783,13 +1964,16 @@ app.post('/api/scan-prescriptions', async (req, res) => {
  * POST /api/approve-prescriptions (BATCH MULTI-DOCUMENT APPROVAL & DUPLICATE PREVENTION)
  * Prevents creating redundant duplicate active medications when brand and generic match.
  */
-app.post('/api/approve-prescriptions', async (req, res) => {
-  const { batchId, patientId, documents } = req.body;
+app.post('/api/approve-prescriptions', requirePatientAccess, async (req, res) => {
+  const { batchId, documents } = req.body;
+  const patientId = req.user.role === 'admin' ? req.body.patientId : req.user.id;
+  if (!patientId) return res.status(400).json({ success: false, error: 'Patient ID is required for administrator approval' });
   if (!Array.isArray(documents) || documents.length === 0) {
     return res.status(400).json({ error: 'No documents provided for approval' });
   }
 
   const registeredUser = await getRegisteredUser(patientId);
+  if (!registeredUser) return res.status(404).json({ success: false, error: 'Patient account not found' });
   const medications = getStore('medications.json', []);
   const schedules = getStore('schedules.json', []);
   const createdMedications = [];
@@ -1802,8 +1986,7 @@ app.post('/api/approve-prescriptions', async (req, res) => {
       logAudit('PATIENT_NAME_MISMATCH_OVERRIDDEN', registeredUser.id, {
         batchId,
         documentId: doc.documentId,
-        registeredPatientName: registeredUser.name,
-        prescriptionPatientName: doc.patientVerification?.extractedName || 'Unknown',
+        patientNameMismatch: true,
         decision: 'PROCEED_ANYWAY',
         userAcknowledgement: 'Patient explicitly acknowledged that the prescription name does not match their account.'
       });
@@ -1815,7 +1998,7 @@ app.post('/api/approve-prescriptions', async (req, res) => {
       // If this item is recognized as a duplicate of an existing active medication (e.g. P-650 vs Paracetamol 650mg):
       // Update instructions of the existing record instead of creating a second redundant medication!
       if (item.isDuplicateRecord && item.existingMedicationId) {
-        const existIdx = medications.findIndex(m => m.id === item.existingMedicationId);
+        const existIdx = medications.findIndex(m => m.id === item.existingMedicationId && String(m.patientId) === String(registeredUser.id));
         if (existIdx !== -1) {
           medications[existIdx].instructions = item.instructions || medications[existIdx].instructions;
           medications[existIdx].frequency = item.frequency || medications[existIdx].frequency;
@@ -1936,13 +2119,15 @@ app.post('/api/approve-prescriptions', async (req, res) => {
 /**
  * Backward compatibility: POST /api/scan-medicine
  */
-app.post('/api/scan-medicine', upload.single('prescriptionImage'), async (req, res) => {
+app.post('/api/scan-medicine', requirePatientAccess, upload.single('prescriptionImage'), async (req, res) => {
   try {
     let filePath = null;
     let fileBuffer = null;
-    const patientId = req.body.patientId || 'patient-default';
+    const patientId = req.user.role === 'admin' ? req.body.patientId : req.user.id;
+    if (!patientId) return res.status(400).json({ success: false, error: 'Patient ID is required for administrator scans' });
     const mode = req.body.mode || 'online';
     const registeredUser = await getRegisteredUser(patientId);
+    if (!registeredUser) return res.status(404).json({ success: false, error: 'Patient account not found' });
 
     if (req.file) {
       filePath = req.file.path;
@@ -1952,10 +2137,16 @@ app.post('/api/scan-medicine', upload.single('prescriptionImage'), async (req, r
       const b64 = matches && matches.length === 3 ? matches[2] : req.body.imageBase64;
       fileBuffer = Buffer.from(b64, 'base64');
       const filename = `rx-${Date.now()}-${Math.round(Math.random() * 1e9)}.jpg`;
-      filePath = path.join(uploadsDir, filename);
+      filePath = path.join(getPatientUploadDir(req.user.id), filename);
       fs.writeFileSync(filePath, fileBuffer);
     } else {
       return res.status(400).json({ error: 'No prescription image provided' });
+    }
+
+    const imageMime = detectImageMime(fileBuffer);
+    if (!imageMime) {
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(415).json({ success: false, error: 'Unsupported or invalid image content. Use a valid JPG, PNG, or WEBP image.' });
     }
 
     const sha256 = computeSHA256(fileBuffer);
@@ -1965,7 +2156,7 @@ app.post('/api/scan-medicine', upload.single('prescriptionImage'), async (req, r
 
     if (mode === 'online') {
       try {
-        geminiOutput = await analyzePrescriptionWithGemini(fileBuffer, 'image/jpeg');
+        geminiOutput = await analyzePrescriptionWithGemini(fileBuffer, imageMime);
         engineUsed = 'GEMINI';
       } catch (err) {
         console.warn('Gemini technical failure:', err.message);
@@ -1979,7 +2170,7 @@ app.post('/api/scan-medicine', upload.single('prescriptionImage'), async (req, r
       const nameComparison = comparePatientNames(registeredUser.name, geminiOutput.patientName);
       resultPayload = {
         prescriptionId: `rx-${Date.now()}`,
-        imageUrl: `/uploads/${path.basename(filePath)}`,
+        imageUrl: createPrivateMediaUrl(req.user.id, filePath),
         sha256,
         engine: 'GEMINI',
         isFallback: false,
@@ -2008,7 +2199,7 @@ app.post('/api/scan-medicine', upload.single('prescriptionImage'), async (req, r
 
       resultPayload = {
         prescriptionId: `rx-${Date.now()}`,
-        imageUrl: `/uploads/${path.basename(filePath)}`,
+        imageUrl: createPrivateMediaUrl(req.user.id, filePath),
         sha256,
         engine: 'TESSERACT',
         isFallback,
@@ -2037,8 +2228,10 @@ app.post('/api/scan-medicine', upload.single('prescriptionImage'), async (req, r
 /**
  * Backward compatibility: POST /api/approve-prescription
  */
-app.post('/api/approve-prescription', async (req, res) => {
-  const { prescriptionId, patientId, approvedMedicines } = req.body;
+app.post('/api/approve-prescription', requirePatientAccess, async (req, res) => {
+  const { prescriptionId, approvedMedicines } = req.body;
+  const patientId = req.user.role === 'admin' ? req.body.patientId : req.user.id;
+  if (!patientId) return res.status(400).json({ success: false, error: 'Patient ID is required for administrator approval' });
   if (!prescriptionId || !Array.isArray(approvedMedicines) || approvedMedicines.length === 0) {
     return res.status(400).json({ error: 'Invalid prescription approval request' });
   }
@@ -2055,7 +2248,7 @@ app.post('/api/approve-prescription', async (req, res) => {
 
     const newMed = {
       id: medId,
-      patientId: patientId || 'USR-e87f3b14-9a2c-4d5e-88f1-209471ab5e82',
+      patientId,
       prescriptionId,
       name: brandName,
       brandName: brandName,
@@ -2212,7 +2405,7 @@ app.get('/api/lookup-medicine', (req, res) => {
 /**
  * POST /api/tick
  */
-app.post('/api/tick', (req, res) => {
+app.post('/api/tick', requireSchedulerSecret, (req, res) => {
   const schedules = getStore('schedules.json', []);
   const notifications = getStore('notifications.json', []);
   const now = new Date();
@@ -2253,8 +2446,38 @@ app.post('/api/tick', (req, res) => {
 
 let serverInstance = null;
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  serverInstance = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MedRemind Backend listening on http://0.0.0.0:${PORT}`);
+  const startServer = async () => {
+    if (process.env.NODE_ENV === 'production') {
+      if (!process.env.DATABASE_URL || !db.isPostgres) {
+        throw new Error('Production startup blocked: a configured PostgreSQL DATABASE_URL is required.');
+      }
+      if (!process.env.AUTH_SECRET || Buffer.byteLength(process.env.AUTH_SECRET) < 32) {
+        throw new Error('Production startup blocked: AUTH_SECRET must be configured with at least 32 random bytes.');
+      }
+      if (!process.env.ADMIN_EMAIL ||
+          !/^[a-f0-9]{32}:[a-f0-9]{128}$/i.test(process.env.ADMIN_PASSWORD_HASH || '')) {
+        throw new Error('Production startup blocked: ADMIN_EMAIL and a valid PBKDF2 ADMIN_PASSWORD_HASH are required.');
+      }
+      if (!process.env.CRON_SECRET || Buffer.byteLength(process.env.CRON_SECRET) < 32) {
+        throw new Error('Production startup blocked: CRON_SECRET must contain at least 32 random bytes.');
+      }
+      if (!(process.env.ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean).length) {
+        throw new Error('Production startup blocked: configure exact ALLOWED_ORIGINS for the deployed frontends.');
+      }
+      const health = await db.checkHealth();
+      if (health.status !== 'connected' || health.type !== 'Supabase PostgreSQL') {
+        throw new Error(`Production startup blocked: PostgreSQL health check failed (${health.error || health.status}).`);
+      }
+    }
+    serverInstance = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`MedRemind Backend listening on http://0.0.0.0:${PORT}`);
+    });
+  };
+
+  startServer().catch(async error => {
+    console.error('[Startup] MedRemind backend refused to start:', error.message);
+    try { await db.pool?.end(); } catch {}
+    process.exit(1);
   });
 }
 
