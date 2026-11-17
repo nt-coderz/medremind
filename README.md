@@ -23,7 +23,7 @@ Combining **Vite + React**, **Capacitor Android native APIs**, **Google Gemini M
 * **Mandatory Human-in-the-Loop Verification**: Discovered medications are presented in an editable review sheet so patients can verify and amend entries before adding them to their active routine.
 
 ### 2. 💊 Comprehensive Medicines Management & Indian Drug Database
-* **253,973 Indian Pharmaceuticals Indexed**: Integrated directly with official Indian pharmaceutical datasets (`indian_pharmaceutical_products_clean.csv` and `A_Z_medicines_dataset_of_India.csv`) stored in an ultra-fast local SQLite database (`backend/data/indian_medicines.db`).
+* **253,973 Indian Pharmaceuticals Indexed**: Integrated directly with official Indian pharmaceutical datasets stored in an ultra-fast local SQLite database (`backend/data/indian_medicines.db`).
 * **Live Autocomplete**: Real-time drug search suggestions as you type medicine names in the Add/Edit form, helping avoid spelling errors.
 * **Safety Knowledge Base**: Includes contraindications, manufacturer information, drug classes, and food/alcohol interaction precautions.
 
@@ -74,16 +74,6 @@ Combining **Vite + React**, **Capacitor Android native APIs**, **Google Gemini M
 * **Portal URL**: Direct access via Admin credentials.
 * **System Metrics**: Total registered users, active patients, and active prescriptions count.
 * **Audit Logs**: Tamper-evident logging of signups, logins, and prescription approvals.
-
----
-
-## 🔑 Default Login Credentials
-
-| Role | Identifier / Email / Phone | Password | Access Level |
-| :--- | :--- | :--- | :--- |
-| **Patient Demo** | `1234567890` or `alex@medremind.app` | `password123` or `123456` | Full Patient App, Reminders & Scanner |
-| **New Patient** | *Tap "Create Free Account"* | *(Your chosen password)* | Full Patient App with instant offline activation |
-| **Administrator** | `ADMIN` | `123456` | Admin Console, User Directory & Audit Log |
 
 ---
 
