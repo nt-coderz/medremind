@@ -1000,7 +1000,7 @@ class DatabaseManager {
         try {
           requestedTime = normalizeTimeTo24Hour(rawTime);
         } catch (timeError) {
-          const embeddedTime = String(rawTime || '').match(/\\b\\d{1,2}:\\d{2}\\s*(?:AM|PM)?\\b/i)?.[0];
+          const embeddedTime = String(rawTime || '').match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b/i)?.[0];
           if (!embeddedTime) throw timeError;
           requestedTime = normalizeTimeTo24Hour(embeddedTime);
         }
