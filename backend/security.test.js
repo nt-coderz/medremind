@@ -332,3 +332,35 @@ test('PostgreSQL dose logs persist against a real schedule and can be retrieved'
     db.memory.doseLogs = previousDoseLogs;
   }
 });
+
+
+test('dose recording rejects invalid status and malformed calendar dates', async () => {
+  const previousIsPostgres = db.isPostgres;
+  const previousPool = db.pool;
+  db.isPostgres = false;
+  db.pool = null;
+  try {
+    await assert.rejects(
+      db.recordDoseLog({
+        patientId: 'patient-dose-test',
+        medicationId: 'med-dose-test',
+        timeSlot: '08:00 AM',
+        status: 'pending'
+      }),
+      /status must be either taken or skipped/
+    );
+    await assert.rejects(
+      db.recordDoseLog({
+        patientId: 'patient-dose-test',
+        medicationId: 'med-dose-test',
+        timeSlot: '08:00 AM',
+        status: 'taken',
+        dateKey: '2026-02-30'
+      }),
+      /valid calendar date/
+    );
+  } finally {
+    db.isPostgres = previousIsPostgres;
+    db.pool = previousPool;
+  }
+});
