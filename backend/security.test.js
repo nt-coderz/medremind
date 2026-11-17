@@ -252,3 +252,75 @@ test('account deletion endpoints reject unauthenticated requests', async () => {
   const cancel = await fetch(`${baseUrl}/api/auth/cancel-deletion`, { method: 'POST' });
   assert.equal(cancel.status, 401);
 });
+
+
+test('PostgreSQL dose logs persist against a real schedule and can be retrieved', async () => {
+  const previousIsPostgres = db.isPostgres;
+  const previousPool = db.pool;
+  const previousSave = db.saveDurableStore;
+  const previousDoseLogs = db.memory.doseLogs;
+  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const scheduledTime = [String(now.getHours()).padStart(2, '0'), String(now.getMinutes()).padStart(2, '0')].join(':');
+  const calls = [];
+
+  db.isPostgres = true;
+  db.saveDurableStore = () => {};
+  db.memory.doseLogs = [];
+  db.pool = {
+    query: async (sql, params = []) => {
+      calls.push({ sql, params });
+      if (sql.includes('SELECT id FROM public.medications')) {
+        return { rows: [{ id: 'med-dose-test' }], rowCount: 1 };
+      }
+      if (sql.includes('SELECT id FROM public.dose_schedules')) {
+        return { rows: [{ id: 'schedule-dose-test' }], rowCount: 1 };
+      }
+      if (sql.includes('SELECT d.id, d.patient_id')) {
+        return {
+          rows: [{
+            id: 'dose-occurrence-test',
+            patient_id: 'patient-dose-test',
+            medication_id: 'med-dose-test',
+            date_key: today,
+            scheduled_timestamp: new Date(),
+            status: 'TAKEN',
+            recorded_at: new Date(),
+            time_display: '08:00 AM',
+            time_slot_label: 'Morning'
+          }]
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    }
+  };
+
+  try {
+    const recorded = await db.recordDoseLog({
+      patientId: 'patient-dose-test',
+      medicationId: 'med-dose-test',
+      timeSlot: 'Morning (08:00 AM)',
+      scheduledTime,
+      status: 'taken',
+      dateKey: today
+    });
+    assert.equal(recorded.status, 'taken');
+
+    const insert = calls.find(call => call.sql.includes('INSERT INTO public.dose_occurrences'));
+    assert.ok(insert, 'dose occurrence insert should execute');
+    assert.match(insert.sql, /schedule_id, medication_id, patient_id/);
+    assert.match(insert.sql, /ON CONFLICT \(schedule_id, scheduled_date\) DO UPDATE/);
+    assert.equal(insert.params[0], 'schedule-dose-test');
+
+    const logs = await db.getDoseLogs('patient-dose-test', today);
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].patientId, 'patient-dose-test');
+    assert.equal(logs[0].status, 'taken');
+    assert.equal(logs[0].timeSlot, '08:00 AM');
+  } finally {
+    db.isPostgres = previousIsPostgres;
+    db.pool = previousPool;
+    db.saveDurableStore = previousSave;
+    db.memory.doseLogs = previousDoseLogs;
+  }
+});
