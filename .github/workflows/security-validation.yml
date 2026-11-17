@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# Keep only the newest validation run for a pull request. This prevents
+# outdated queued runs from consuming hosted-runner capacity after new commits.
+concurrency:
+  group: security-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 
 jobs:
   backend-security-tests:
