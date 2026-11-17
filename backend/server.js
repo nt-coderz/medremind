@@ -1202,9 +1202,14 @@ app.post('/api/consents/revoke', requirePatientAccess, async (req, res) => {
  * POST /api/admin/backup
  * Triggers full JSON database snapshot
  */
-app.post('/api/admin/backup', requireAdmin, (req, res) => {
-  const backup = db.createBackup();
-  res.json(backup);
+app.post('/api/admin/backup', requireAdmin, async (req, res) => {
+  try {
+    const backup = await db.createBackup();
+    res.json(backup);
+  } catch (err) {
+    console.error('[Admin Backup] Failed to create database snapshot:', err.message);
+    res.status(500).json({ success: false, error: 'Unable to create a complete database backup.' });
+  }
 });
 
 // User Lookup endpoint (Legacy compatibility)
