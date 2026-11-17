@@ -225,26 +225,70 @@ class DatabaseManager {
   }
 
   // Backup strategy
-  createBackup() {
+  async createBackup() {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const backupFile = path.join(backupsDir, `medremind-backup-${timestamp}.json`);
+    let backupData = this.memory;
+
+    // In production, snapshot the authoritative PostgreSQL tables rather than
+    // exporting the local development cache (which may be empty or stale).
+    if (this.isPostgres && this.pool) {
+      const tables = [
+        'profiles',
+        'prescriptions',
+        'prescription_extractions',
+        'medications',
+        'dose_schedules',
+        'dose_occurrences',
+        'caregiver_relationships',
+        'notifications',
+        'audit_logs',
+        'consents',
+        'food_logs',
+        'nutrition_targets'
+      ];
+      const snapshot = {};
+      for (const table of tables) {
+        const result = await this.pool.query(`SELECT * FROM public."${table}"`);
+        snapshot[table] = result.rows;
+      }
+      backupData = snapshot;
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('Production backup requires a healthy PostgreSQL connection.');
+    }
+
+    const counts = this.isPostgres && this.pool
+      ? {
+          users: backupData.profiles?.length || 0,
+          prescriptions: backupData.prescriptions?.length || 0,
+          medications: backupData.medications?.length || 0,
+          schedules: backupData.dose_schedules?.length || 0,
+          doseLogs: backupData.dose_occurrences?.length || 0,
+          consents: backupData.consents?.length || 0,
+          auditLogs: backupData.audit_logs?.length || 0
+        }
+      : {
+          users: backupData.users.length,
+          prescriptions: backupData.prescriptions.length,
+          medications: backupData.medications.length,
+          schedules: backupData.schedules.length,
+          doseLogs: backupData.doseLogs.length,
+          consents: backupData.consents.length,
+          auditLogs: backupData.auditLogs.length
+        };
+
     const payload = {
       backupDate: new Date().toISOString(),
-      counts: {
-        users: this.memory.users.length,
-        prescriptions: this.memory.prescriptions.length,
-        medications: this.memory.medications.length,
-        schedules: this.memory.schedules.length,
-        doseLogs: this.memory.doseLogs.length,
-        consents: this.memory.consents.length,
-        auditLogs: this.memory.auditLogs.length
-      },
-      data: this.memory
+      database: this.isPostgres && this.pool ? 'postgresql' : 'local',
+      counts,
+      data: backupData
     };
     fs.writeFileSync(backupFile, JSON.stringify(payload, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    try { fs.chmodSync(backupFile, 0o600); } catch {}
     return {
       success: true,
       backupFile: path.basename(backupFile),
+      database: payload.database,
       counts: payload.counts
     };
   }
