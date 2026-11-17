@@ -1127,11 +1127,16 @@ app.post('/api/schedules', requirePatientAccess, async (req, res) => {
  * GET /api/dose-logs
  * Retrieves adherence logs for a patient
  */
-app.get('/api/dose-logs', requirePatientAccess, (req, res) => {
-  const patientId = req.query.patientId || req.user?.id;
-  const date = req.query.date;
-  const logs = db.getDoseLogs(patientId, date);
-  res.json({ success: true, logs });
+app.get('/api/dose-logs', requirePatientAccess, async (req, res) => {
+  try {
+    const patientId = req.query.patientId || req.user?.id;
+    const date = req.query.date;
+    const logs = await db.getDoseLogs(patientId, date);
+    res.json({ success: true, logs });
+  } catch (err) {
+    console.error('[Dose Logs] Failed to retrieve logs:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to retrieve dose logs.' });
+  }
 });
 
 /**
