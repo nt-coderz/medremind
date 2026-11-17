@@ -936,6 +936,18 @@ class DatabaseManager {
     if (!patientId || !medicationId) {
       throw new Error('Patient and medication are required to record a dose.');
     }
+    if (!['taken', 'skipped'].includes(String(status || '').toLowerCase())) {
+      throw new Error('Dose status must be either taken or skipped.');
+    }
+    if (typeof dateKey !== 'undefined' && dateKey !== null) {
+      if (typeof dateKey !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(dateKey)) {
+        throw new Error('Dose date must use YYYY-MM-DD format.');
+      }
+      const parsedDate = new Date(`${dateKey}T00:00:00.000Z`);
+      if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== dateKey) {
+        throw new Error('Dose date is not a valid calendar date.');
+      }
+    }
     if (this.isPostgres && this.pool) {
       const owner = await this.pool.query(
         'SELECT id FROM public.medications WHERE id = $1 AND patient_id::text = $2',
