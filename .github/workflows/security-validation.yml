@@ -9,9 +9,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: medremind-security-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 jobs:
   backend-security-tests:
