@@ -5,9 +5,15 @@ import pg from 'pg';
 import { fileURLToPath } from 'url';
 import { normalizeTimeTo24Hour } from '../utils/timeUtils.js';
 import { getDatabaseSslConfig } from './sslConfig.js';
+import dotenv from 'dotenv';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+// Load backend/.env before reading DATABASE_URL or AUTH_SECRET. Static ESM imports
+// are evaluated before server.js executes dotenv.config(), so this module must
+// initialize its own environment before creating the database pool or token secret.
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
+
 const dataDir = path.join(__dirname, '..', 'data');
 const backupsDir = path.join(dataDir, 'backups');
 
