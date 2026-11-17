@@ -364,3 +364,37 @@ test('dose recording rejects invalid status and malformed calendar dates', async
     db.pool = previousPool;
   }
 });
+
+
+test('administrator backup exports PostgreSQL tables instead of the local cache', async () => {
+  const previousIsPostgres = db.isPostgres;
+  const previousPool = db.pool;
+  const queriedTables = [];
+  db.isPostgres = true;
+  db.pool = {
+    query: async (sql) => {
+      const match = sql.match(/FROM public\."([a-z_]+)"/);
+      assert.ok(match, 'backup query must use an explicit table name');
+      queriedTables.push(match[1]);
+      return { rows: [{ marker: match[1] }] };
+    }
+  };
+
+  let backupPath;
+  try {
+    const result = await db.createBackup();
+    backupPath = path.join(process.cwd(), 'data', 'backups', result.backupFile);
+    const payload = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+    assert.equal(result.database, 'postgresql');
+    assert.equal(payload.database, 'postgresql');
+    assert.equal(payload.data.profiles[0].marker, 'profiles');
+    assert.equal(payload.data.dose_occurrences[0].marker, 'dose_occurrences');
+    assert.equal(payload.data.food_logs[0].marker, 'food_logs');
+    assert.equal(result.counts.users, 1);
+    assert.equal(queriedTables.length, 12);
+  } finally {
+    if (backupPath) fs.rmSync(backupPath, { force: true });
+    db.isPostgres = previousIsPostgres;
+    db.pool = previousPool;
+  }
+});
